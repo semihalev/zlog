@@ -22,7 +22,7 @@ func Example_globalLogger() {
 func ExampleSetDefault() {
 	// Create a custom logger
 	logger := zlog.NewStructured()
-	logger.SetWriter(zlog.StderrWriter)
+	logger.SetWriter(zlog.StderrWriter())
 	logger.SetLevel(zlog.LevelDebug)
 
 	// Set it as the global default

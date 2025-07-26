@@ -252,7 +252,7 @@ func TestAsyncWriterEdgeCases(t *testing.T) {
 	})
 
 	t.Run("EmptyRingBuffer", func(t *testing.T) {
-		rb := NewRingBuffer(16)
+		rb := NewCompatRingBuffer(16)
 		// Try to put empty data
 		if !rb.Put([]byte{}) {
 			t.Error("Empty put should succeed")
@@ -274,7 +274,7 @@ func TestRingBufferPanic(t *testing.T) {
 	}()
 
 	// This should panic
-	NewRingBuffer(15) // Not power of 2
+	NewCompatRingBuffer(15) // Not power of 2
 }
 
 func TestEscapeStringLongUnicode(t *testing.T) {
@@ -301,39 +301,8 @@ func TestUltimateLoggerLongMessage(t *testing.T) {
 	}
 }
 
-func TestNanoLoggerEdgeCases(t *testing.T) {
-	logger := NewNanoLogger(nil)
-
-	t.Run("SmallBuffer", func(t *testing.T) {
-		buf := make([]byte, 10) // Too small
-		n := logger.Info(buf, "test")
-		if n != 0 {
-			t.Error("Expected 0 for too small buffer")
-		}
-	})
-
-	t.Run("VeryLongMessage", func(t *testing.T) {
-		buf := make([]byte, 100)
-		longMsg := strings.Repeat("x", 300)
-		n := logger.Info(buf, longMsg)
-		if n == 0 || n > 100 {
-			t.Error("Expected truncated message")
-		}
-	})
-}
-
-func TestZeroAllocLoggerDisabled(t *testing.T) {
-	logger := NewZeroAllocLogger()
-	logger.SetLevel(LevelError)
-	logger.SetZeroWriter(DiscardZeroWriter{})
-
-	// These should all be filtered
-	logger.Debug("filtered")
-	logger.Warn("filtered")
-}
-
 func TestStderrWriter(t *testing.T) {
 	// Just verify it doesn't panic
-	w := StderrWriter
+	w := os.Stderr
 	w.Write([]byte("test"))
 }

@@ -71,6 +71,11 @@ func NewTerminalWriter(out io.Writer) *TerminalWriter {
 	if f, ok := out.(*os.File); ok {
 		useColor = isTerminal(f.Fd())
 	}
+	
+	// Allow disabling colors via environment variable
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		useColor = false
+	}
 
 	return &TerminalWriter{
 		out:        out,
@@ -82,32 +87,32 @@ func NewTerminalWriter(out io.Writer) *TerminalWriter {
 
 // Write decodes binary log and outputs formatted text
 func (w *TerminalWriter) Write(b []byte) (int, error) {
-	if len(b) < 22 { // Minimum header size
+	if len(b) < 16 { // Minimum header size: magic(4) + version(1) + level(1) + timestamp(8) + msglen(2)
 		return 0, fmt.Errorf("invalid log entry: too short")
 	}
 
 	// Decode binary header
-	// MagicHeader = 0x554C4F47 ("ULOG") in little endian
-	if b[0] != 0x47 || b[1] != 0x4F || b[2] != 0x4C || b[3] != 0x55 {
+	// Check for MagicHeader (ZLOG)
+	magic := *(*uint32)(unsafe.Pointer(&b[0]))
+	if magic != MagicHeader {
 		return 0, fmt.Errorf("invalid magic header")
 	}
 
+	// version := b[4] // Currently unused
 	level := Level(b[5])
-	timestamp := uint64(b[14]) | uint64(b[15])<<8 | uint64(b[16])<<16 | uint64(b[17])<<24 |
-		uint64(b[18])<<32 | uint64(b[19])<<40 | uint64(b[20])<<48 | uint64(b[21])<<56
+	timestamp := *(*uint64)(unsafe.Pointer(&b[6]))
+	msgLen := *(*uint16)(unsafe.Pointer(&b[14]))
 
-	pos := 22
+	// Validate message length
+	if len(b) < 16+int(msgLen) {
+		return 0, fmt.Errorf("invalid log entry: message truncated")
+	}
 
 	// Get message
 	var msgStart, msgEnd int
-	if pos < len(b) {
-		msgLen := int(b[pos])
-		pos++
-		if pos+msgLen <= len(b) {
-			msgStart = pos
-			msgEnd = pos + msgLen
-			pos += msgLen
-		}
+	if msgLen > 0 {
+		msgStart = 16
+		msgEnd = 16 + int(msgLen)
 	}
 
 	// Lock to use our pre-allocated buffer
@@ -138,6 +143,9 @@ func (w *TerminalWriter) Write(b []byte) (int, error) {
 	if msgEnd > msgStart {
 		buf = append(buf, b[msgStart:msgEnd]...)
 	}
+
+	// Check if we have fields (for structured logger)
+	pos := 16 + int(msgLen)
 
 	// Add padding if we have fields
 	if pos < len(b) && msgEnd-msgStart < termMsgJust {
@@ -278,13 +286,52 @@ func (w *TerminalWriter) decodeFieldValueBuf(buf, b []byte, pos int, fieldType F
 
 // escapeStringOptimized escapes string without allocation
 func escapeStringOptimized(buf []byte, s []byte) []byte {
-	// Fast path - check if escaping needed
+	// Fast path - scan for special characters using optimized loop
 	needsEscape := false
-	for _, b := range s {
-		if b == '"' || b == '\\' || b == '\n' || b == '\r' || b == '\t' || b == ' ' {
+	hasSpace := false
+
+	// Unroll loop for better performance
+	i := 0
+	for ; i+4 <= len(s); i += 4 {
+		if s[i] == '"' || s[i] == '\\' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t' {
 			needsEscape = true
 			break
 		}
+		if s[i+1] == '"' || s[i+1] == '\\' || s[i+1] == '\n' || s[i+1] == '\r' || s[i+1] == '\t' {
+			needsEscape = true
+			break
+		}
+		if s[i+2] == '"' || s[i+2] == '\\' || s[i+2] == '\n' || s[i+2] == '\r' || s[i+2] == '\t' {
+			needsEscape = true
+			break
+		}
+		if s[i+3] == '"' || s[i+3] == '\\' || s[i+3] == '\n' || s[i+3] == '\r' || s[i+3] == '\t' {
+			needsEscape = true
+			break
+		}
+		if s[i] == ' ' || s[i+1] == ' ' || s[i+2] == ' ' || s[i+3] == ' ' {
+			hasSpace = true
+		}
+	}
+
+	// Check remaining bytes
+	if !needsEscape {
+		for ; i < len(s); i++ {
+			if s[i] == '"' || s[i] == '\\' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t' {
+				needsEscape = true
+				break
+			}
+			if s[i] == ' ' {
+				hasSpace = true
+			}
+		}
+	}
+
+	// If only spaces, just quote it
+	if !needsEscape && hasSpace {
+		buf = append(buf, '"')
+		buf = append(buf, s...)
+		return append(buf, '"')
 	}
 
 	if !needsEscape {
@@ -293,6 +340,14 @@ func escapeStringOptimized(buf []byte, s []byte) []byte {
 
 	// Escape with quotes
 	buf = append(buf, '"')
+
+	// Reserve space to avoid multiple allocations
+	if cap(buf)-len(buf) < len(s)*2 {
+		newBuf := make([]byte, len(buf), len(buf)+len(s)*2)
+		copy(newBuf, buf)
+		buf = newBuf
+	}
+
 	for _, b := range s {
 		switch b {
 		case '\\':
@@ -315,7 +370,8 @@ func escapeStringOptimized(buf []byte, s []byte) []byte {
 // escapeString escapes a string for terminal output (kept for compatibility)
 func escapeString(s string) string {
 	var buf []byte
-	return string(escapeStringOptimized(buf, []byte(s)))
+	// Use zero-copy string to bytes conversion
+	return BytesToString(escapeStringOptimized(buf, StringToBytes(s)))
 }
 
 // Fast integer to string conversion without allocation
@@ -434,4 +490,18 @@ func StdoutTerminal() io.Writer {
 // StderrTerminal creates a terminal writer for stderr
 func StderrTerminal() io.Writer {
 	return NewTerminalWriter(os.Stderr)
+}
+
+// SetColorEnabled allows manually enabling/disabling colors
+func (w *TerminalWriter) SetColorEnabled(enabled bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.useColor = enabled
+}
+
+// IsColorEnabled returns whether colors are enabled
+func (w *TerminalWriter) IsColorEnabled() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.useColor
 }

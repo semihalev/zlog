@@ -45,29 +45,6 @@ func TestCompatibility(t *testing.T) {
 		}
 	})
 
-	// Test SimpleLogger
-	t.Run("SimpleLogger", func(t *testing.T) {
-		var buf bytes.Buffer
-		logger := NewSimple()
-		logger.SetWriter(&buf)
-
-		// Test variadic any
-		logger.Info("hello", "world", 123)
-		logger.Debug("debug", "message")
-		logger.Warn("warning")
-		logger.Error("error", "occurred")
-
-		// Test formatted
-		logger.Infof("Hello %s, you are %d years old", "John", 30)
-		logger.Debugf("Debug: %v", map[string]int{"a": 1})
-		logger.Warnf("Warning: %.2f%%", 95.5)
-		logger.Errorf("Error %d: %s", 404, "not found")
-
-		if buf.Len() == 0 {
-			t.Error("No output from SimpleLogger")
-		}
-	})
-
 	// Test Any field helper
 	t.Run("AnyField", func(t *testing.T) {
 		var buf bytes.Buffer
@@ -107,17 +84,6 @@ func TestGlobalCompatibilityMigration(t *testing.T) {
 	// If we got here without panic, the API is compatible
 }
 
-func TestSimpleLoggerFormatted(t *testing.T) {
-	logger := NewSimple()
-	logger.SetWriter(io.Discard)
-
-	// Test formatted output - just verify no panic
-	logger.Infof("Server started on %s:%d", "localhost", 8080)
-	logger.Errorf("Failed to connect to %s: %v", "database", "connection refused")
-	logger.Debugf("Debug %v", map[string]any{"test": 123})
-	logger.Warnf("Warning: %d%%", 95)
-}
-
 // Benchmark compatibility layer
 func BenchmarkCompatibilityKV(b *testing.B) {
 	logger := NewStructured()
@@ -126,26 +92,6 @@ func BenchmarkCompatibilityKV(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		logger.InfoKV("test message", "key1", "value1", "key2", 42, "key3", true)
-	}
-}
-
-func BenchmarkSimpleLogger(b *testing.B) {
-	logger := NewSimple()
-	logger.SetWriter(io.Discard)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		logger.Info("test message", "with", "values", 123)
-	}
-}
-
-func BenchmarkSimpleLoggerSingle(b *testing.B) {
-	logger := NewSimple()
-	logger.SetWriter(io.Discard)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		logger.Info("test message")
 	}
 }
 

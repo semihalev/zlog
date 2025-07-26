@@ -1,10 +1,8 @@
 package zlog
 
 import (
-	"encoding/binary"
 	"os"
-	"sync"
-	"time"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -98,17 +96,21 @@ func Bytes(key string, val []byte) Field {
 	return Field{Key: key, Type: FieldTypeBytes, ptr: unsafe.Pointer(&val[0]), num: uint64(len(val))}
 }
 
-// Buffer pool for structured logging
-var structuredPool = sync.Pool{
-	New: func() interface{} {
-		b := make([]byte, 1024)
-		return &b
-	},
+// getStructuredBuffer gets a buffer for structured logging
+func getStructuredBuffer(estimatedSize int) *[]byte {
+	// Add some overhead for field encoding
+	return GetBuffer(estimatedSize + 256)
+}
+
+// putStructuredBuffer returns a buffer to the pool
+func putStructuredBuffer(buf *[]byte) {
+	PutBuffer(buf)
 }
 
 // StructuredLogger provides zero-allocation structured logging
 type StructuredLogger struct {
 	*Logger
+	sequence atomic.Uint64
 }
 
 // NewStructured creates a new structured logger
@@ -116,13 +118,66 @@ func NewStructured() *StructuredLogger {
 	return &StructuredLogger{Logger: New()}
 }
 
+// shouldLog checks if the given level should be logged
+func (l *StructuredLogger) shouldLog(level Level) bool {
+	return l.Logger.shouldLog(level)
+}
+
+// getWriter returns the current writer
+func (l *StructuredLogger) getWriter() Writer {
+	return l.Logger.getWriter()
+}
+
 // logFields logs with fields using a pooled buffer
 //
 //go:noinline
 func (l *StructuredLogger) logFields(level Level, msg string, fields []Field) {
+	// Estimate required size
+	msgLen := len(msg)
+	if msgLen > 255 {
+		msgLen = 255
+	}
+
+	// Calculate size: header(22) + msgLen(1) + msg + fieldCount(1) + fields
+	estimatedSize := 24 + msgLen
+	for _, f := range fields {
+		estimatedSize += 2 + len(f.Key) + 16 // Conservative estimate
+	}
+
+	// For small logs, use stack allocation
+	if estimatedSize <= 512 {
+		var stackBuf [512]byte
+		n := l.formatStructuredMessage(stackBuf[:], level, msg, fields)
+		if l.getWriter() != nil {
+			l.getWriter().Write(stackBuf[:n])
+		}
+		return
+	}
+
 	// Get buffer from pool
-	bufPtr := structuredPool.Get().(*[]byte)
+	bufPtr := getStructuredBuffer(estimatedSize)
 	buf := *bufPtr
+
+	// Ensure capacity
+	if cap(buf) < estimatedSize {
+		buf = make([]byte, 0, estimatedSize)
+	}
+
+	// Format message
+	n := l.formatStructuredMessage(buf[:cap(buf)], level, msg, fields)
+
+	// Write
+	if l.getWriter() != nil {
+		l.getWriter().Write(buf[:n])
+	}
+
+	// Return buffer to pool
+	*bufPtr = buf
+	putStructuredBuffer(bufPtr)
+}
+
+// formatStructuredMessage formats the message and returns bytes written
+func (l *StructuredLogger) formatStructuredMessage(buf []byte, level Level, msg string, fields []Field) int {
 	pos := 0
 
 	// Binary header
@@ -151,31 +206,28 @@ func (l *StructuredLogger) logFields(level Level, msg string, fields []Field) {
 		pos += encodeField(buf[pos:], &fields[i])
 	}
 
-	// Write
-	w := l.getWriter()
-	w.Write(buf[:pos])
-
-	// Return buffer to pool
-	structuredPool.Put(bufPtr)
+	return pos
 }
 
 // writeBinaryHeader writes the standard header
+//
+//go:inline
 func writeBinaryHeader(buf []byte, level Level, seq uint64) int {
+	// Use unsafe for faster header writing
+	p := unsafe.Pointer(&buf[0])
+	
 	// Magic
-	binary.LittleEndian.PutUint32(buf[0:], MagicHeader)
-
-	// Version
-	buf[4] = Version
-
-	// Level
-	buf[5] = byte(level)
-
+	*(*uint32)(p) = MagicHeader
+	
+	// Version and Level
+	*(*uint8)(unsafe.Add(p, 4)) = Version
+	*(*uint8)(unsafe.Add(p, 5)) = byte(level)
+	
 	// Sequence
-	binary.LittleEndian.PutUint64(buf[6:], seq)
-
+	*(*uint64)(unsafe.Add(p, 6)) = seq
+	
 	// Timestamp
-	now := uint64(time.Now().UnixNano())
-	binary.LittleEndian.PutUint64(buf[14:], now)
+	*(*uint64)(unsafe.Add(p, 14)) = uint64(nanotime())
 
 	return 22
 }
@@ -297,7 +349,7 @@ func encodeField(buf []byte, f *Field) int {
 //
 //go:inline
 func (l *StructuredLogger) Debug(msg string, fields ...Field) {
-	if l.level <= LevelDebug {
+	if l.shouldLog(LevelDebug) {
 		l.logFields(LevelDebug, msg, fields)
 	}
 }
@@ -306,7 +358,7 @@ func (l *StructuredLogger) Debug(msg string, fields ...Field) {
 //
 //go:inline
 func (l *StructuredLogger) Info(msg string, fields ...Field) {
-	if l.level <= LevelInfo {
+	if l.shouldLog(LevelInfo) {
 		l.logFields(LevelInfo, msg, fields)
 	}
 }
@@ -315,7 +367,7 @@ func (l *StructuredLogger) Info(msg string, fields ...Field) {
 //
 //go:inline
 func (l *StructuredLogger) Warn(msg string, fields ...Field) {
-	if l.level <= LevelWarn {
+	if l.shouldLog(LevelWarn) {
 		l.logFields(LevelWarn, msg, fields)
 	}
 }
@@ -324,7 +376,7 @@ func (l *StructuredLogger) Warn(msg string, fields ...Field) {
 //
 //go:inline
 func (l *StructuredLogger) Error(msg string, fields ...Field) {
-	if l.level <= LevelError {
+	if l.shouldLog(LevelError) {
 		l.logFields(LevelError, msg, fields)
 	}
 }
@@ -333,7 +385,7 @@ func (l *StructuredLogger) Error(msg string, fields ...Field) {
 //
 //go:inline
 func (l *StructuredLogger) Fatal(msg string, fields ...Field) {
-	if l.level <= LevelFatal {
+	if l.shouldLog(LevelFatal) {
 		l.logFields(LevelFatal, msg, fields)
 		os.Exit(1)
 	}
