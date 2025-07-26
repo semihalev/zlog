@@ -29,35 +29,6 @@ func BenchmarkUltimateLoggerParallel(b *testing.B) {
 	})
 }
 
-func BenchmarkNanoLogger(b *testing.B) {
-	logger := NewNanoLogger(nil) // nil output for pure speed test
-	buf := make([]byte, 256)
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		logger.Info(buf, "benchmark message")
-	}
-}
-
-func BenchmarkNanoLoggerWithOutput(b *testing.B) {
-	var sink []byte
-	logger := NewNanoLogger(func(b []byte) {
-		sink = b // Prevent optimization
-	})
-	buf := make([]byte, 256)
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		logger.Info(buf, "benchmark message")
-	}
-
-	_ = sink
-}
-
 // Benchmark raw operations for comparison
 func BenchmarkRawMemcpy(b *testing.B) {
 	src := "benchmark message"

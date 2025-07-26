@@ -58,13 +58,22 @@ func (l *StructuredLogger) FatalKV(msg string, keysAndValues ...any) {
 //
 //go:noinline
 func (l *StructuredLogger) logKV(level Level, msg string, keysAndValues ...any) {
+	// Estimate size
+	estimatedSize := 256 + len(msg)
 	// Get buffer from pool
-	bufPtr := structuredPool.Get().(*[]byte)
+	bufPtr := getStructuredBuffer(estimatedSize)
 	buf := *bufPtr
+
+	// Ensure capacity
+	if cap(buf) < estimatedSize {
+		buf = make([]byte, estimatedSize, estimatedSize)
+	} else {
+		buf = buf[:estimatedSize]
+	}
 	pos := 0
 
 	// Binary header
-	pos += writeBinaryHeader(buf[:], level, l.sequence.Add(1))
+	pos += writeBinaryHeader(buf, level, l.sequence.Add(1))
 
 	// Message
 	msgLen := len(msg)
@@ -153,7 +162,8 @@ func (l *StructuredLogger) logKV(level Level, msg string, keysAndValues ...any) 
 	w.Write(buf[:pos])
 
 	// Return buffer to pool
-	structuredPool.Put(bufPtr)
+	*bufPtr = buf
+	putStructuredBuffer(bufPtr)
 }
 
 // Global compatibility functions that accept any type
@@ -181,102 +191,6 @@ func ErrorKV(msg string, keysAndValues ...any) {
 // FatalKV logs fatal with key-value pairs and exits
 func FatalKV(msg string, keysAndValues ...any) {
 	Default().FatalKV(msg, keysAndValues...)
-}
-
-// Simple logger that accepts any values (like v0.x)
-type SimpleLogger struct {
-	*Logger
-}
-
-// NewSimple creates a simple logger that accepts any values
-func NewSimple() *SimpleLogger {
-	return &SimpleLogger{Logger: New()}
-}
-
-// Debug logs debug accepting any values
-func (l *SimpleLogger) Debug(v ...any) {
-	if !l.shouldLog(LevelDebug) {
-		return
-	}
-	msg := formatArgs(v...)
-	l.logDirect(LevelDebug, msg)
-}
-
-// Info logs info accepting any values
-func (l *SimpleLogger) Info(v ...any) {
-	if !l.shouldLog(LevelInfo) {
-		return
-	}
-	msg := formatArgs(v...)
-	l.logDirect(LevelInfo, msg)
-}
-
-// Warn logs warning accepting any values
-func (l *SimpleLogger) Warn(v ...any) {
-	if !l.shouldLog(LevelWarn) {
-		return
-	}
-	msg := formatArgs(v...)
-	l.logDirect(LevelWarn, msg)
-}
-
-// Error logs error accepting any values
-func (l *SimpleLogger) Error(v ...any) {
-	if !l.shouldLog(LevelError) {
-		return
-	}
-	msg := formatArgs(v...)
-	l.logDirect(LevelError, msg)
-}
-
-// Fatal logs fatal accepting any values and exits
-func (l *SimpleLogger) Fatal(v ...any) {
-	msg := formatArgs(v...)
-	l.logDirect(LevelFatal, msg)
-	os.Exit(1)
-}
-
-// Debugf logs formatted debug
-func (l *SimpleLogger) Debugf(format string, v ...any) {
-	if !l.shouldLog(LevelDebug) {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	l.logDirect(LevelDebug, msg)
-}
-
-// Infof logs formatted info
-func (l *SimpleLogger) Infof(format string, v ...any) {
-	if !l.shouldLog(LevelInfo) {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	l.logDirect(LevelInfo, msg)
-}
-
-// Warnf logs formatted warning
-func (l *SimpleLogger) Warnf(format string, v ...any) {
-	if !l.shouldLog(LevelWarn) {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	l.logDirect(LevelWarn, msg)
-}
-
-// Errorf logs formatted error
-func (l *SimpleLogger) Errorf(format string, v ...any) {
-	if !l.shouldLog(LevelError) {
-		return
-	}
-	msg := fmt.Sprintf(format, v...)
-	l.logDirect(LevelError, msg)
-}
-
-// Fatalf logs formatted fatal and exits
-func (l *SimpleLogger) Fatalf(format string, v ...any) {
-	msg := fmt.Sprintf(format, v...)
-	l.logDirect(LevelFatal, msg)
-	os.Exit(1)
 }
 
 // Helper to create field from any type (for convenience)

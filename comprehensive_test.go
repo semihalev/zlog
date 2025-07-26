@@ -6,7 +6,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"unsafe"
 )
 
 // testCapture is a test helper that implements io.Writer
@@ -298,7 +297,7 @@ func TestEscapeString(t *testing.T) {
 }
 
 func TestRingBuffer(t *testing.T) {
-	rb := NewRingBuffer(16) // Small buffer for testing
+	rb := NewCompatRingBuffer(16) // Small buffer for testing
 
 	// Test Put and Get
 	data := []byte("hello")
@@ -405,56 +404,7 @@ func TestUltimateLogger(t *testing.T) {
 	logger.Info("info message")
 	logger.Error("error message")
 
-	// Get buffer to verify data was written
-	buf, offset := logger.GetBuffer()
-	if offset == 0 {
-		t.Error("No data written to buffer")
-	}
-
-	// Verify magic header
-	if len(buf) >= 4 {
-		magic := *(*uint32)(unsafe.Pointer(&buf[0]))
-		if magic != MagicHeader {
-			t.Errorf("Invalid magic header: %x", magic)
-		}
-	}
-}
-
-func TestNanoLogger(t *testing.T) {
-	var output []byte
-	logger := NewNanoLogger(func(b []byte) {
-		output = make([]byte, len(b))
-		copy(output, b)
-	})
-
-	buf := make([]byte, 256)
-	n := logger.Info(buf, "test message")
-
-	if n == 0 {
-		t.Error("No bytes written")
-	}
-
-	if len(output) == 0 {
-		t.Error("Output function not called")
-	}
-}
-
-func TestZeroAllocLogger(t *testing.T) {
-	logger := NewZeroAllocLogger()
-	logger.SetLevel(LevelDebug)
-
-	// Test with discard writer
-	logger.SetZeroWriter(DiscardZeroWriter{})
-
-	// Test all log levels
-	logger.Debug("debug")
-	logger.Info("info")
-	logger.Warn("warn")
-	logger.Error("error")
-
-	// Test level filtering
-	logger.SetLevel(LevelError)
-	logger.Info("should not log") // This should be filtered
+	// UltimateLogger now uses writer-based approach, no buffer to check
 }
 
 func TestIoctlReadTermios(t *testing.T) {

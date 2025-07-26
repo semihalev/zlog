@@ -6,7 +6,7 @@ import (
 )
 
 func BenchmarkUltralog(b *testing.B) {
-	logger := New()
+	logger := NewUltimateLogger()
 	logger.SetWriter(io.Discard)
 
 	b.ResetTimer()
@@ -17,7 +17,7 @@ func BenchmarkUltralog(b *testing.B) {
 }
 
 func BenchmarkUltralogParallel(b *testing.B) {
-	logger := New()
+	logger := NewUltimateLogger()
 	logger.SetWriter(io.Discard)
 
 	b.ResetTimer()
