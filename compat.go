@@ -3,7 +3,6 @@ package zlog
 import (
 	"fmt"
 	"os"
-	"strconv"
 )
 
 // Small buffer pool for integer conversions (removed - not needed with current optimization)
@@ -209,38 +208,5 @@ func toString(v any) string {
 	default:
 		// Only allocate for non-string types
 		return fmt.Sprint(v)
-	}
-}
-
-// formatArgs efficiently formats multiple arguments
-func formatArgs(v ...any) string {
-	switch len(v) {
-	case 0:
-		return ""
-	case 1:
-		// Single argument - optimize common cases
-		switch s := v[0].(type) {
-		case string:
-			return s
-		case []byte:
-			return string(s)
-		case error:
-			return s.Error()
-		case int:
-			return strconv.Itoa(s)
-		case int64:
-			return strconv.FormatInt(s, 10)
-		case uint64:
-			return strconv.FormatUint(s, 10)
-		case bool:
-			return strconv.FormatBool(s)
-		case float64:
-			return strconv.FormatFloat(s, 'f', -1, 64)
-		default:
-			return fmt.Sprint(s)
-		}
-	default:
-		// Multiple arguments - only use fmt.Sprint when necessary
-		return fmt.Sprint(v...)
 	}
 }
