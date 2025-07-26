@@ -1,6 +1,6 @@
 package zlog_test
 
-import "github.com/semihalev/zlog"
+import "github.com/semihalev/zlog/v2"
 
 func Example_terminal() {
 	// Create logger with beautiful terminal output
