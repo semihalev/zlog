@@ -100,15 +100,15 @@ func (w *TerminalWriter) Write(b []byte) (int, error) {
 
 	// version := b[4] // Currently unused
 	level := Level(b[5])
-	
+
 	var timestamp uint64
 	var msgLen int
 	var msgStart int
-	
+
 	// Try to detect format by looking at the data
 	// Basic logger: 16-byte header with 2-byte msgLen at offset 14
 	// Structured logger: 22-byte header with 1-byte msgLen at offset 22
-	
+
 	// Try basic format first (most common)
 	if len(b) >= 16 {
 		possibleMsgLen := int(*(*uint16)(unsafe.Pointer(&b[14])))
