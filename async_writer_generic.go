@@ -12,7 +12,7 @@ type RingBuffer[T any] struct {
 	mask   uint64              // Size mask for fast modulo
 	_      [56]byte            // Padding to cache line
 	head   atomic.Uint64       // Producer position
-	_      [56]byte            // Padding to cache line  
+	_      [56]byte            // Padding to cache line
 	tail   atomic.Uint64       // Consumer position
 	_      [56]byte            // Padding to cache line
 	buffer []atomic.Pointer[T] // Buffer of atomic pointers
@@ -23,13 +23,13 @@ type RingBuffer[T any] struct {
 func NewRingBuffer[T any](size int, pool *Pool[*T]) *RingBuffer[T] {
 	// Ensure size is power of 2
 	size = nextPowerOf2(size)
-	
+
 	rb := &RingBuffer[T]{
 		buffer: make([]atomic.Pointer[T], size),
 		mask:   uint64(size - 1),
 		pool:   pool,
 	}
-	
+
 	return rb
 }
 
@@ -39,15 +39,15 @@ func NewRingBuffer[T any](size int, pool *Pool[*T]) *RingBuffer[T] {
 func (rb *RingBuffer[T]) Put(item *T) bool {
 	head := rb.head.Load()
 	next := (head + 1) & rb.mask
-	
+
 	// Check if full
 	if next == rb.tail.Load() {
 		return false
 	}
-	
+
 	// Store item
 	rb.buffer[head].Store(item)
-	
+
 	// Update head (this is the linearization point)
 	rb.head.Store(next)
 	return true
@@ -60,12 +60,12 @@ func (rb *RingBuffer[T]) Get() (*T, bool) {
 	for {
 		tail := rb.tail.Load()
 		head := rb.head.Load()
-		
+
 		// Empty?
 		if tail == head {
 			return nil, false
 		}
-		
+
 		// Try to claim this slot
 		next := (tail + 1) & rb.mask
 		if rb.tail.CompareAndSwap(tail, next) {
@@ -102,19 +102,19 @@ func NewAsyncWriterV2(w io.Writer, bufferSize, workers int) *AsyncWriterV2 {
 	pool := NewPool(func() *LogEntry {
 		return &LogEntry{}
 	})
-	
+
 	aw := &AsyncWriterV2{
 		rb:      NewRingBuffer(bufferSize, pool),
 		writer:  w,
 		pool:    pool,
 		workers: workers,
 	}
-	
+
 	// Start workers
 	for i := 0; i < workers; i++ {
 		go aw.worker()
 	}
-	
+
 	return aw
 }
 
@@ -122,7 +122,7 @@ func NewAsyncWriterV2(w io.Writer, bufferSize, workers int) *AsyncWriterV2 {
 func (aw *AsyncWriterV2) Write(b []byte) (int, error) {
 	// Get entry from pool
 	entry := aw.pool.Get()
-	
+
 	// Copy data to avoid lifetime issues
 	if cap(entry.data) < len(b) {
 		entry.data = make([]byte, len(b))
@@ -130,14 +130,14 @@ func (aw *AsyncWriterV2) Write(b []byte) (int, error) {
 		entry.data = entry.data[:len(b)]
 	}
 	copy(entry.data, b)
-	
+
 	// Try to put in ring buffer
 	for !aw.rb.Put(entry) {
 		if aw.done.Load() {
 			aw.pool.Put(entry)
 			return 0, io.ErrClosedPipe
 		}
-		
+
 		// Backpressure - help consume
 		if consumed, ok := aw.rb.Get(); ok {
 			aw.writer.Write(consumed.data)
@@ -147,7 +147,7 @@ func (aw *AsyncWriterV2) Write(b []byte) (int, error) {
 			runtime.Gosched()
 		}
 	}
-	
+
 	return len(b), nil
 }
 
@@ -163,7 +163,7 @@ func (aw *AsyncWriterV2) worker() {
 			runtime.Gosched()
 		}
 	}
-	
+
 	// Drain remaining
 	for {
 		entry, ok := aw.rb.Get()

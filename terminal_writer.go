@@ -71,7 +71,7 @@ func NewTerminalWriter(out io.Writer) *TerminalWriter {
 	if f, ok := out.(*os.File); ok {
 		useColor = isTerminal(f.Fd())
 	}
-	
+
 	// Allow disabling colors via environment variable
 	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		useColor = false
@@ -504,4 +504,12 @@ func (w *TerminalWriter) IsColorEnabled() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.useColor
+}
+
+// IsTerminal checks if the given writer is a terminal
+func IsTerminal(w io.Writer) bool {
+	if f, ok := w.(*os.File); ok {
+		return isTerminal(f.Fd())
+	}
+	return false
 }

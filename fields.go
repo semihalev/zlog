@@ -215,17 +215,17 @@ func (l *StructuredLogger) formatStructuredMessage(buf []byte, level Level, msg 
 func writeBinaryHeader(buf []byte, level Level, seq uint64) int {
 	// Use unsafe for faster header writing
 	p := unsafe.Pointer(&buf[0])
-	
+
 	// Magic
 	*(*uint32)(p) = MagicHeader
-	
+
 	// Version and Level
 	*(*uint8)(unsafe.Add(p, 4)) = Version
 	*(*uint8)(unsafe.Add(p, 5)) = byte(level)
-	
+
 	// Sequence
 	*(*uint64)(unsafe.Add(p, 6)) = seq
-	
+
 	// Timestamp
 	*(*uint64)(unsafe.Add(p, 14)) = uint64(nanotime())
 

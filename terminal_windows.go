@@ -15,12 +15,12 @@ const (
 )
 
 var (
-	kernel32                       = syscall.NewLazyDLL("kernel32.dll")
-	procGetConsoleMode             = kernel32.NewProc("GetConsoleMode")
-	procSetConsoleMode             = kernel32.NewProc("SetConsoleMode")
-	procGetStdHandle               = kernel32.NewProc("GetStdHandle")
-	virtualTerminalSupported       bool
-	virtualTerminalSupportChecked  bool
+	kernel32                      = syscall.NewLazyDLL("kernel32.dll")
+	procGetConsoleMode            = kernel32.NewProc("GetConsoleMode")
+	procSetConsoleMode            = kernel32.NewProc("SetConsoleMode")
+	procGetStdHandle              = kernel32.NewProc("GetStdHandle")
+	virtualTerminalSupported      bool
+	virtualTerminalSupportChecked bool
 )
 
 // isTerminal returns true if the file descriptor is a terminal and enables colors if supported
@@ -42,7 +42,7 @@ func isTerminal(fd uintptr) bool {
 		}
 	}
 
-	// On older Windows versions without virtual terminal support, 
+	// On older Windows versions without virtual terminal support,
 	// we should disable colors even if it's a terminal
 	if !virtualTerminalSupported {
 		// Check Windows version - Windows 10 build 14393 and later support VT
@@ -59,7 +59,7 @@ func checkWindowsVersion() bool {
 	// Get Windows version
 	dll := syscall.NewLazyDLL("ntdll.dll")
 	proc := dll.NewProc("RtlGetVersion")
-	
+
 	type osversioninfoexw struct {
 		dwOSVersionInfoSize uint32
 		dwMajorVersion      uint32
@@ -68,23 +68,23 @@ func checkWindowsVersion() bool {
 		dwPlatformId        uint32
 		szCSDVersion        [128]uint16
 	}
-	
+
 	var info osversioninfoexw
 	info.dwOSVersionInfoSize = uint32(unsafe.Sizeof(info))
 	ret, _, _ := proc.Call(uintptr(unsafe.Pointer(&info)))
-	
+
 	if ret == 0 {
 		// Windows 10 is version 10.0, build 14393+ supports ANSI
 		if info.dwMajorVersion > 10 || (info.dwMajorVersion == 10 && info.dwBuildNumber >= 14393) {
 			return true
 		}
 	}
-	
+
 	// Fallback: check if TERM environment variable is set (Git Bash, WSL, etc.)
 	if os.Getenv("TERM") != "" {
 		return true
 	}
-	
+
 	return false
 }
 

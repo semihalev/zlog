@@ -15,7 +15,7 @@ func NewCompatRingBuffer(size int) *OldRingBuffer {
 	if size&(size-1) != 0 {
 		panic("ring buffer size must be power of 2")
 	}
-	
+
 	pool := NewPool(func() *Entry {
 		return &Entry{}
 	})
@@ -37,7 +37,7 @@ func (orb *OldRingBuffer) Put(data []byte) bool {
 	return orb.rb.Put(entry)
 }
 
-// Get wrapper for old interface  
+// Get wrapper for old interface
 func (orb *OldRingBuffer) Get() ([]byte, bool) {
 	entry, ok := orb.rb.Get()
 	if !ok {
