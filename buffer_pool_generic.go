@@ -59,7 +59,7 @@ func (bp *BufferPool) Get(size int) *[]byte {
 	if size <= 0 {
 		size = 64
 	}
-	
+
 	// Use CLZ (count leading zeros) for fast size class calculation
 	bits := 64 - leadingZeros64(uint64(size-1))
 	idx := bits - 6
@@ -71,7 +71,7 @@ func (bp *BufferPool) Get(size int) *[]byte {
 		b := make([]byte, 0, size)
 		return &b
 	}
-	
+
 	buf := bp.pools[idx].Get()
 	// Ensure the buffer has enough capacity
 	if cap(*buf) < size {
@@ -86,12 +86,12 @@ func (bp *BufferPool) Get(size int) *[]byte {
 func (bp *BufferPool) Put(buf *[]byte) {
 	// Reset buffer
 	*buf = (*buf)[:0]
-	
+
 	cap := cap(*buf)
 	if cap == 0 {
 		return
 	}
-	
+
 	// Find size class
 	bits := 64 - leadingZeros64(uint64(cap-1))
 	idx := bits - 6
@@ -104,13 +104,13 @@ func (bp *BufferPool) Put(buf *[]byte) {
 //
 //go:inline
 func leadingZeros64(x uint64) int {
-	return len64tab[x>>58] + 
-		len64tab[(x>>52)&0x3f] + 
-		len64tab[(x>>46)&0x3f] + 
-		len64tab[(x>>40)&0x3f] + 
-		len64tab[(x>>34)&0x3f] + 
-		len64tab[(x>>28)&0x3f] + 
-		len64tab[(x>>22)&0x3f] + 
+	return len64tab[x>>58] +
+		len64tab[(x>>52)&0x3f] +
+		len64tab[(x>>46)&0x3f] +
+		len64tab[(x>>40)&0x3f] +
+		len64tab[(x>>34)&0x3f] +
+		len64tab[(x>>28)&0x3f] +
+		len64tab[(x>>22)&0x3f] +
 		len64tab[(x>>16)&0x3f]
 }
 
@@ -133,7 +133,7 @@ func GetBuffer(size int) *[]byte {
 
 // PutBuffer returns a buffer to the global pool
 //
-//go:inline  
+//go:inline
 func PutBuffer(buf *[]byte) {
 	globalBufferPool.Put(buf)
 }
