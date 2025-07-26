@@ -87,7 +87,7 @@ func NewTerminalWriter(out io.Writer) *TerminalWriter {
 
 // Write decodes binary log and outputs formatted text
 func (w *TerminalWriter) Write(b []byte) (int, error) {
-	if len(b) < 16 { // Minimum header size: magic(4) + version(1) + level(1) + timestamp(8) + msglen(2)
+	if len(b) < 16 { // Minimum header size
 		return 0, fmt.Errorf("invalid log entry: too short")
 	}
 
@@ -100,19 +100,45 @@ func (w *TerminalWriter) Write(b []byte) (int, error) {
 
 	// version := b[4] // Currently unused
 	level := Level(b[5])
-	timestamp := *(*uint64)(unsafe.Pointer(&b[6]))
-	msgLen := *(*uint16)(unsafe.Pointer(&b[14]))
-
-	// Validate message length
-	if len(b) < 16+int(msgLen) {
-		return 0, fmt.Errorf("invalid log entry: message truncated")
+	
+	var timestamp uint64
+	var msgLen int
+	var msgStart int
+	
+	// Try to detect format by looking at the data
+	// Basic logger: 16-byte header with 2-byte msgLen at offset 14
+	// Structured logger: 22-byte header with 1-byte msgLen at offset 22
+	
+	// Try basic format first (most common)
+	if len(b) >= 16 {
+		possibleMsgLen := int(*(*uint16)(unsafe.Pointer(&b[14])))
+		if possibleMsgLen > 0 && possibleMsgLen <= 65535 && len(b) >= 16+possibleMsgLen {
+			// Looks like basic format
+			timestamp = *(*uint64)(unsafe.Pointer(&b[6]))
+			msgLen = possibleMsgLen
+			msgStart = 16
+		} else if len(b) >= 23 {
+			// Try structured format
+			possibleMsgLen = int(b[22])
+			if len(b) >= 23+possibleMsgLen {
+				// Looks like structured format
+				timestamp = *(*uint64)(unsafe.Pointer(&b[14]))
+				msgLen = possibleMsgLen
+				msgStart = 23
+			} else {
+				return 0, fmt.Errorf("invalid log entry: cannot determine format")
+			}
+		} else {
+			return 0, fmt.Errorf("invalid log entry: message truncated")
+		}
+	} else {
+		return 0, fmt.Errorf("invalid log format: too short")
 	}
 
 	// Get message
-	var msgStart, msgEnd int
+	var msgEnd int
 	if msgLen > 0 {
-		msgStart = 16
-		msgEnd = 16 + int(msgLen)
+		msgEnd = msgStart + msgLen
 	}
 
 	// Lock to use our pre-allocated buffer
@@ -145,7 +171,7 @@ func (w *TerminalWriter) Write(b []byte) (int, error) {
 	}
 
 	// Check if we have fields (for structured logger)
-	pos := 16 + int(msgLen)
+	pos := msgStart + msgLen
 
 	// Add padding if we have fields
 	if pos < len(b) && msgEnd-msgStart < termMsgJust {
