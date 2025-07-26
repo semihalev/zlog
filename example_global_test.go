@@ -1,6 +1,6 @@
 package zlog_test
 
-import "github.com/semihalev/zlog"
+import "github.com/semihalev/zlog/v2"
 
 func Example_globalLogger() {
 	// Global logger is ready to use immediately

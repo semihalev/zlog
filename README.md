@@ -1,6 +1,6 @@
 # zlog - The Fastest Zero-Allocation Logging Library for Go
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/semihalev/zlog.svg)](https://pkg.go.dev/github.com/semihalev/zlog)
+[![Go Reference](https://pkg.go.dev/badge/github.com/semihalev/zlog/v2.svg)](https://pkg.go.dev/github.com/semihalev/zlog/v2)
 [![Go Report Card](https://goreportcard.com/badge/github.com/semihalev/zlog)](https://goreportcard.com/report/github.com/semihalev/zlog)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Test Coverage](https://img.shields.io/badge/coverage-83.7%25-brightgreen.svg)](https://github.com/semihalev/zlog)
@@ -38,10 +38,12 @@ BenchmarkMMapWriter-10              39296056     30.96 ns/op     48 B/op    1 al
 ## 📦 Installation
 
 ```bash
-go get github.com/semihalev/zlog
+go get github.com/semihalev/zlog/v2
 ```
 
 Requires Go 1.23 or later.
+
+> **Note**: This is v2 of zlog with major performance improvements. For v1, use `github.com/semihalev/zlog`.
 
 ## 🎯 Quick Start
 
@@ -50,7 +52,7 @@ Requires Go 1.23 or later.
 ```go
 package main
 
-import "github.com/semihalev/zlog"
+import "github.com/semihalev/zlog/v2"
 
 func main() {
     // Simple key-value pairs
@@ -78,7 +80,7 @@ The global logger intelligently handles both styles:
 ```go
 package main
 
-import "github.com/semihalev/zlog"
+import "github.com/semihalev/zlog/v2"
 
 func main() {
     // Create logger instance with beautiful terminal output
