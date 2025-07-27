@@ -101,7 +101,7 @@ func (l *Logger) Error(msg string) {
 // Fatal logs a fatal message and exits
 func (l *Logger) Fatal(msg string) {
 	l.log(LevelFatal, msg)
-	exit(1)
+	os.Exit(1)
 }
 
 // log is the core logging function
@@ -168,9 +168,6 @@ type Writer = io.Writer
 //go:noescape
 func nanotime() int64
 
-//go:linkname exit runtime.exit
-//go:noescape
-func exit(code int32)
 
 // StdoutWriter returns a writer to stdout
 func StdoutWriter() Writer {
