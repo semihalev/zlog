@@ -35,10 +35,12 @@ type Logger struct {
 
 // New creates a new logger with auto-detected output format
 func New() *Logger {
-	return &Logger{
+	l := &Logger{
 		format: FormatBinary,
 		writer: os.Stderr,
 	}
+	l.level.Store(uint32(LevelInfo)) // Default to Info level
+	return l
 }
 
 // SetLevel sets the log level
@@ -167,7 +169,6 @@ type Writer = io.Writer
 //go:linkname nanotime runtime.nanotime
 //go:noescape
 func nanotime() int64
-
 
 // StdoutWriter returns a writer to stdout
 func StdoutWriter() Writer {

@@ -16,7 +16,7 @@ type UltimateLogger struct {
 // NewUltimateLogger creates a zero-allocation logger
 func NewUltimateLogger() *UltimateLogger {
 	return &UltimateLogger{
-		level:  uint32(LevelInfo),
+		level:  uint32(LevelInfo), // Default to Info level
 		writer: io.Discard,
 	}
 }
