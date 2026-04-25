@@ -1,53 +1,35 @@
-# zlog - The Fastest Zero-Allocation Logging Library for Go
+# zlog
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/semihalev/zlog/v2.svg)](https://pkg.go.dev/github.com/semihalev/zlog/v2)
 [![Go Report Card](https://goreportcard.com/badge/github.com/semihalev/zlog)](https://goreportcard.com/report/github.com/semihalev/zlog)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Test Coverage](https://img.shields.io/badge/coverage-83.7%25-brightgreen.svg)](https://github.com/semihalev/zlog)
 
-The world's fastest logging library for Go with **true zero allocations**, achieving an incredible **21.88 nanoseconds** per log operation. Benchmarks prove it's **2x faster than Zerolog** and produces **45.7 million logs/second**. Built from the ground up for Go 1.23+ with a focus on extreme performance without memory waste.
+A small, very fast, **truly zero-allocation** structured logger for Go.
 
-## 🚀 Performance
+Apple M5, Go 1.23+:
 
 ```
-BenchmarkUltimateLogger-10          56482167     21.88 ns/op      0 B/op    0 allocs/op
-BenchmarkStructuredLogger-10        22522099     50.19 ns/op      0 B/op    0 allocs/op
-BenchmarkStructuredLogger5Fields-10 18310116     65.83 ns/op      0 B/op    0 allocs/op
-BenchmarkDisabledDebug-10         1000000000      0.2519 ns/op     0 B/op    0 allocs/op
-BenchmarkMMapWriter-10              39296056     30.96 ns/op     48 B/op    1 allocs/op
+BenchmarkUltimateLogger              15.9 ns/op    0 B/op   0 allocs/op
+BenchmarkUltimateLoggerParallel       5.2 ns/op    0 B/op   0 allocs/op
+BenchmarkStructuredLogger            35.6 ns/op    0 B/op   0 allocs/op
+BenchmarkStructuredLoggerParallel    10.5 ns/op    0 B/op   0 allocs/op
+BenchmarkStructured + 5 fields       45.2 ns/op    0 B/op   0 allocs/op
+BenchmarkStructured + 10 fields      76.7 ns/op    0 B/op   0 allocs/op
+BenchmarkRealWorld → TerminalWriter  26.5 ns/op    0 B/op   0 allocs/op
+BenchmarkDisabledDebug                0.23 ns/op   0 B/op   0 allocs/op
 ```
 
-### Throughput
-- **UltimateLogger**: 45.7 million logs/second
-- **StructuredLogger**: 19.9 million logs/second
-- **MMapWriter**: 46.5 million logs/second (with zero syscalls)
+The interesting number is the last column on every row: every logging path is genuinely 0 allocs/op once the buffer pool is warm, including the colored terminal output. Parallel benchmarks are *faster* than serial because each `GOMAXPROCS` slot keeps its own pool localcache and there's no contention on a sequence counter.
 
-## ✨ Features
-
-- **True Zero Allocations**: All core loggers achieve 0 B/op, 0 allocs/op
-- **Extreme Performance**: 21.88 ns/op - 2x faster than Zerolog!
-- **Lock-Free Design**: Uses atomic operations for thread-safe, contention-free logging
-- **Cache-Line Aligned**: Structures optimized for CPU cache efficiency (64 bytes)
-- **Beautiful Terminal Output**: Colored, formatted output for development
-- **Structured Logging**: Type-safe fields without interface boxing
-- **Multiple Writers**: Terminal, Memory-mapped files, Async ring buffer
-- **Standard io.Writer**: Compatible with any Go io.Writer implementation
-- **Binary Format**: Compact binary encoding for maximum throughput
-- **Go 1.23+ Optimized**: Built using the latest Go features and runtime optimizations
-
-## 📦 Installation
+## Install
 
 ```bash
 go get github.com/semihalev/zlog/v2
 ```
 
-Requires Go 1.23 or later.
+Requires Go 1.23+.
 
-> **Note**: This is v2 of zlog with major performance improvements. For v1, use `github.com/semihalev/zlog`.
-
-## 🎯 Quick Start
-
-### Global Logger
+## Quick start
 
 ```go
 package main
@@ -55,347 +37,168 @@ package main
 import "github.com/semihalev/zlog/v2"
 
 func main() {
-    // Simple key-value pairs
-    zlog.Info("Application starting")
-    zlog.Info("User logged in", "username", "john", "user_id", 12345)
-    zlog.Error("Connection failed", "host", "localhost", "port", 5432)
-    
-    // Configure global logger
-    zlog.SetLevel(zlog.LevelWarn)  // Only Warn, Error, Fatal will be logged
-    
-    // Or use typed fields for better performance (0 allocations)
-    zlog.Error("Database error",
-        zlog.String("host", "localhost"),
-        zlog.Int("port", 5432),
-        zlog.String("error", "connection refused"))
+    log := zlog.NewStructured()
+    log.SetWriter(zlog.StdoutTerminal())
+
+    log.Info("server started",
+        zlog.String("addr", ":8080"),
+        zlog.Int("workers", 4),
+    )
+    log.Warn("slow query",
+        zlog.String("table", "users"),
+        zlog.Float64("duration_ms", 327.4),
+    )
+    log.Error("db connection lost",
+        zlog.String("err", "i/o timeout"),
+        zlog.Int("retry", 3),
+    )
 }
 ```
 
-The global logger intelligently handles both styles:
-- **Any values**: `zlog.Info("msg", "key", value, ...)` - Simple and flexible
-- **Typed fields**: `zlog.Info("msg", zlog.String("key", "val"))` - Zero allocations
+```
+INFO  [04-25|15:51:30] server started                          addr=:8080 workers=4
+WARN  [04-25|15:51:30] slow query                              table=users duration_ms=327.4
+ERROR [04-25|15:51:30] db connection lost                      err="i/o timeout" retry=3
+```
 
-### Basic Logging
+## Logger types
+
+| Type | Purpose | Cost |
+|---|---|---|
+| `zlog.NewUltimateLogger()` | Bare-message hot path. No fields. | ~16 ns/op serial, ~5 ns/op parallel |
+| `zlog.NewStructured()` | Typed fields, the recommended API. | ~36 ns/op + ~10 ns per extra field |
+| `zlog.New()` | Plain `Logger`. Same shape as Ultimate. | ~21 ns/op |
+
+For most apps, `NewStructured()` is the right choice: zero alloc, typed fields, ~26ns end-to-end when the writer is a `TerminalWriter` (that path is direct-text, no binary intermediate).
+
+## Fields
 
 ```go
-package main
-
-import "github.com/semihalev/zlog/v2"
-
-func main() {
-    // Create logger instance with beautiful terminal output
-    logger := zlog.New()
-    logger.SetWriter(zlog.StdoutTerminal())
-    
-    // Basic logging
-    logger.Debug("Application starting...")
-    logger.Info("Server initialized successfully")
-    logger.Warn("Configuration not found, using defaults")
-    logger.Error("Failed to connect to database")
-    logger.Fatal("Critical error, shutting down") // Exits with code 1
-}
-```
-
-### Structured Logging
-
-```go
-// Create structured logger with zero allocations
-logger := zlog.NewStructured()
-logger.SetWriter(zlog.StdoutTerminal())
-
-// Log with typed fields - 0 allocations thanks to buffer pool!
-logger.Info("User logged in",
-    zlog.String("username", "john_doe"),
-    zlog.Int("user_id", 12345),
-    zlog.Bool("admin", true),
-    zlog.Float64("session_time", 30.5))
-
-logger.Error("Request failed",
-    zlog.String("method", "POST"),
-    zlog.String("path", "/api/users"),
-    zlog.Int("status", 500),
-    zlog.Uint64("duration_ns", 1234567))
-```
-
-### High-Performance Logging
-
-```go
-// For maximum performance with zero allocations
-logger := zlog.NewUltimateLogger()
-logger.SetWriter(zlog.StdoutWriter())
-
-// 21.88 ns/op with true zero allocations
-logger.Info("Ultra-fast logging")
-logger.Debug("This is incredibly fast")
-
-// Can handle 45.7 million logs/second!
-```
-
-## 🏗️ Architecture
-
-### Logger Types
-
-1. **Logger** - Basic high-performance logger
-   - Simple and fast for basic logging needs
-   - Binary format output
-   - Configurable log levels
-
-2. **StructuredLogger** - Type-safe structured logging (50.19 ns/op, 0 allocs)
-   - Typed fields without interface boxing
-   - Zero-allocation field encoding with buffer pool
-   - Perfect for production systems
-   - 19.9 million logs/second
-
-3. **UltimateLogger** - Maximum performance logger (21.88 ns/op, 0 allocs)
-   - Uses sync.Pool for buffer management
-   - No large memory allocations
-   - 45.7 million logs/second
-   - For extreme throughput requirements
-
-### Writers
-
-- **StdoutTerminal/StderrTerminal** - Beautiful colored terminal output
-- **StdoutWriter/StderrWriter** - Basic standard output
-- **DiscardWriter** - Discard all output (benchmarking)
-- **MMapWriter** - Memory-mapped files for zero-syscall writes
-- **Custom Writers** - Any `io.Writer` implementation works
-
-## 🎨 Terminal Output
-
-The terminal writer provides beautiful, colored output:
-
-```
-DEBUG[01-02|15:04:05] Application starting...
-INFO [01-02|15:04:05] Server initialized successfully
-WARN [01-02|15:04:05] Config not found, using defaults
-ERROR[01-02|15:04:05] Database connection failed         error="timeout" retry=3
-```
-
-Colors:
-- `DEBUG` - Cyan
-- `INFO` - Green  
-- `WARN` - Yellow
-- `ERROR` - Red
-- `FATAL` - Magenta
-
-### Windows Support
-
-zlog automatically detects and enables ANSI color support on Windows 10 build 14393 (Anniversary Update) and later. For older Windows versions or if you see escape codes like `←[32m`, you can:
-
-1. **Disable colors manually:**
-```go
-tw := zlog.NewTerminalWriter(os.Stdout).(*zlog.TerminalWriter)
-tw.SetColorEnabled(false)
-logger.SetWriter(tw)
-```
-
-2. **Use environment variables:**
-```bash
-# Disable colors globally
-set NO_COLOR=1
-
-# Or set TERM to dumb
-set TERM=dumb
-```
-
-3. **Use plain writers for no colors:**
-```go
-logger.SetWriter(zlog.StdoutWriter()) // No colors, just plain text
-```
-
-## 🔧 Advanced Usage
-
-### Memory-Mapped File Logging
-
-```go
-// Create memory-mapped file writer for zero-syscall logging
-mmap, err := zlog.NewMMapWriter("/var/log/app.log", 100*1024*1024) // 100MB
-if err != nil {
-    panic(err)
-}
-defer mmap.Close()
-
-logger := zlog.New()
-logger.SetWriter(mmap)
-```
-
-
-### Custom Writers
-
-```go
-// Any io.Writer works - files, network connections, buffers, etc.
-file, _ := os.Create("app.log")
-logger := zlog.New()
-logger.SetWriter(file)
-
-// Or use multiple writers with io.MultiWriter
-multi := io.MultiWriter(os.Stdout, file)
-logger.SetWriter(multi)
-
-// Custom implementation
-type CustomWriter struct{}
-
-func (w CustomWriter) Write(p []byte) (int, error) {
-    // Your custom logic here
-    return len(p), nil
-}
-
-logger.SetWriter(CustomWriter{})
-```
-
-### Log Levels
-
-```go
-logger := zlog.New()
-
-// Set minimum log level
-logger.SetLevel(zlog.LevelWarn) // Only Warn, Error, Fatal will be logged
-
-// Check current level
-if logger.GetLevel() <= zlog.LevelDebug {
-    // Expensive debug operation
-}
-```
-
-### Field Types
-
-All field types are available with zero allocations:
-
-```go
-logger.Info("event",
-    zlog.String("name", "John"),
+log.Info("event",
+    zlog.String("name", "Alice"),
     zlog.Int("age", 30),
     zlog.Int64("id", 123456789),
     zlog.Uint("count", 42),
     zlog.Uint64("total", 9999999),
     zlog.Float32("score", 98.5),
-    zlog.Float64("precision", 3.14159265359),
+    zlog.Float64("pi", 3.14159),
     zlog.Bool("active", true),
-    zlog.Bytes("data", []byte{0x01, 0x02, 0x03}))
+    zlog.Bytes("data", []byte{0x01, 0x02, 0x03}),
+)
 ```
 
-## 🏆 Benchmarks
+All field constructors are inlinable and allocation-free.
 
-Run on Apple M4:
-
-```bash
-$ go test -bench=. -benchmem
-
-BenchmarkUltimateLogger-10          56482167     21.88 ns/op      0 B/op    0 allocs/op
-BenchmarkUltimateLoggerParallel-10  24136107     47.52 ns/op      0 B/op    0 allocs/op
-BenchmarkStructuredLogger-10        22522099     50.19 ns/op      0 B/op    0 allocs/op
-BenchmarkStructuredLogger5Fields-10 18310116     65.83 ns/op      0 B/op    0 allocs/op
-BenchmarkStructuredLogger10Fields-10 11887023    100.8 ns/op      0 B/op    0 allocs/op
-BenchmarkDisabledDebug-10         1000000000      0.2519 ns/op     0 B/op    0 allocs/op
-BenchmarkMMapWriter-10              39296056     30.96 ns/op     48 B/op    1 allocs/op
-BenchmarkTerminalWriter-10          13813890     85.39 ns/op     64 B/op    1 allocs/op
-```
-
-## 📊 Comparison with Other Loggers
-
-Comprehensive benchmarks on Apple M4 with Go 1.23 (structured logging with 5 fields):
-
-| Logger | ns/op | B/op | allocs/op | logs/sec |
-|--------|------:|-----:|----------:|--------:|
-| **zlog (Ultimate)** | **21.88** | **0** | **0** | **45.7M** |
-| **zlog (Structured)** | **50.19** | **0** | **0** | **19.9M** |
-| **zlog (Global)** | **65.83** | **0** | **0** | **15.2M** |
-| Zerolog | ~42.3 | 0 | 0 | ~23.6M |
-| Zerolog (5 fields) | ~184 | 0 | 0 | ~5.4M |
-| Zap | ~300+ | 320 | 1 | ~3.3M |
-| slog (stdlib) | ~600 | 120 | 3 | ~1.7M |
-| Logrus | ~1500 | 1416 | 25 | ~0.7M |
-
-**Key Achievement**: zlog is **2x faster than Zerolog** and produces **45.7 million logs/second** while maintaining zero allocations!
-
-## 🔬 How It Works
-
-### Zero Allocations
-
-1. **Stack-allocated buffers**: All temporary buffers are allocated on the stack
-2. **Buffer pools**: StructuredLogger uses sync.Pool to eliminate allocations
-3. **Direct memory writes**: Use `unsafe` for direct memory manipulation
-4. **No interface boxing**: Typed fields avoid `interface{}` allocations
-5. **Binary format**: Compact encoding reduces memory usage
-6. **Lock-free atomics**: Avoid mutex allocations
-
-### Performance Techniques
-
-- **Cache-line alignment**: 64-byte aligned structures
-- **Atomic operations**: Lock-free level checks and updates
-- **Memory-mapped I/O**: Zero-syscall writes to files
-- **Inlining**: Critical paths are inlined by the compiler
-- **Direct syscalls**: Using Go's runtime linkname for nanotime()
-
-
-## 🧪 Testing
-
-The library has **85.3% test coverage** and passes all tests including race detection:
-
-```bash
-$ go test -race ./...
-ok  github.com/semihalev/zlog  1.886s
-
-$ go test -cover ./...
-ok  github.com/semihalev/zlog  0.520s  coverage: 85.3% of statements
-```
-
-## 📝 Examples
-
-### High-Performance HTTP Server
+There's also a key/value-pair API for the global helper that's friendlier when you have `any` values:
 
 ```go
-// Create the fastest possible logger for request logging
-logger := zlog.NewUltimateLogger()
-
-http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-    start := time.Now()
-    
-    // Your handler logic here
-    
-    // Log with 21.88 ns overhead
-    logger.Info(fmt.Sprintf("%s %s %d %dns", 
-        r.Method, r.URL.Path, 200, time.Since(start).Nanoseconds()))
-})
+zlog.Info("user logged in", "username", "alice", "user_id", 12345)
 ```
 
-### Production Service
+The global helpers (`zlog.Info`, `zlog.Warn`, ...) accept either typed `Field` values or alternating key/value pairs.
+
+## Writers
+
+- `zlog.StdoutTerminal()` / `zlog.StderrTerminal()` — colored, padded, human-readable terminal output. The structured logger detects this writer and formats text directly into a pooled buffer (no binary intermediate).
+- `zlog.StdoutWriter()` / `zlog.StderrWriter()` — raw binary output to stdout/stderr.
+- `zlog.NewLogfmtWriter(io.Writer)` — `key=value` text format on top of the binary log.
+- `zlog.NewMMapWriter(path, size)` — memory-mapped file with no per-write syscall (Linux/macOS/Windows).
+- `zlog.NewAsyncWriter(io.Writer, bufSize)` — lock-free ring buffer with worker drains; for fan-out at high throughput.
+- Any `io.Writer` works. The package writes a compact binary record; the terminal/logfmt writers are the supported decoders.
 
 ```go
-// Structured logger for production with terminal output
-logger := zlog.NewStructured()
-logger.SetWriter(zlog.StdoutTerminal())
+mmap, _ := zlog.NewMMapWriter("/var/log/app.log", 100*1024*1024) // 100 MB
+defer mmap.Close()
 
-// Log with rich context
-logger.Info("service started",
-    zlog.String("version", "1.0.0"),
-    zlog.String("env", "production"),
-    zlog.Int("pid", os.Getpid()),
-    zlog.String("node", hostname))
-
-// Log errors with context
-logger.Error("database query failed",
-    zlog.String("query", query),
-    zlog.String("error", err.Error()),
-    zlog.Float64("duration_ms", duration.Seconds()*1000))
+log := zlog.NewStructured()
+log.SetWriter(mmap)
 ```
 
-See more examples in [example_test.go](example_test.go) and [demo/main.go](demo/main.go).
+## Levels
 
-## 🤝 Contributing
+```go
+log := zlog.NewStructured()
+log.SetLevel(zlog.LevelWarn) // Only Warn / Error / Fatal are emitted.
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+if log.GetLevel() <= zlog.LevelDebug {
+    // expensive debug computation only when needed
+}
+```
 
-## 📄 License
+A disabled level call is ~0.23 ns/op (a single atomic load + compare).
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## Terminal output
 
-## 🙏 Acknowledgments
+```
+DEBUG [01-02|15:04:05] starting up
+INFO  [01-02|15:04:05] server initialized
+WARN  [01-02|15:04:05] config not found, using defaults
+ERROR [01-02|15:04:05] db connection failed                    error=timeout retry=3
+```
 
-- Built with ❤️ for the Go community
-- Inspired by the need for truly zero-allocation logging
-- Special thanks to all contributors
+Colors:
 
----
+- DEBUG → cyan
+- INFO → green
+- WARN → yellow
+- ERROR → red
+- FATAL → magenta
 
-**Note**: This logger uses `unsafe` operations for maximum performance. While thoroughly tested, please evaluate if this fits your risk tolerance for production systems.
+Color is auto-detected from the underlying `*os.File` (TTY check). It also respects `NO_COLOR` and `TERM=dumb`. To force-disable in code:
+
+```go
+tw := zlog.NewTerminalWriter(os.Stdout).(*zlog.TerminalWriter)
+tw.SetColorEnabled(false)
+log.SetWriter(tw)
+```
+
+The terminal writer caches the formatted timestamp by Unix second, so `time.Time` decomposition runs once per second, not per log line.
+
+### Windows
+
+ANSI colors work on Windows 10 (build 14393+) automatically. On older Windows or when output isn't a TTY, plain text is used. Same env vars (`NO_COLOR`, `TERM=dumb`) apply.
+
+## How it stays zero-alloc
+
+A few of the things that matter:
+
+- Every record is built into a `sync.Pool`-backed buffer indexed by a power-of-two size class. Allocation only happens when the pool is cold.
+- The "small message → stack buffer" fast path that traditional loggers use was deliberately removed: passing a stack array to an `io.Writer.Write` interface call forces it onto the heap. The pool path is the actual zero-alloc path.
+- Field encoding writes int/float values as a single `*(*uint64)(unsafe.Pointer(&buf[pos])) = ...` store in native byte order — one instruction per numeric field, not eight byte stores.
+- The structured logger detects when its writer is a `*TerminalWriter` and formats text directly into the pooled buffer, skipping the binary encode → re-decode round-trip. Type assertion is ~1ns; the saving is ~30-40ns.
+- Wall-clock timestamps are computed as `baseWallNs + (nanotime() - baseMonoNs)`, where `baseWallNs` and `baseMonoNs` are sampled once at `init()`. One VDSO call per log, ~5ns. Drifts from the kernel's wall clock if NTP adjusts the system time after init — fine for log timestamps.
+- Escape-detection scans use a 256-byte classifier table (Go compiles byte-LUT loads to NEON `tbl` / SSSE3 `pshufb` on supported architectures).
+- No `runtime.exit`, no panic-recovery in hot paths, no `defer` in the terminal writer's `Write`.
+
+If you change a logger or writer and start seeing 1 alloc/op, run `go build -gcflags='-m=2'` and look for `escapes to heap` on the buffer — that's almost always an interface boundary somewhere.
+
+## Binary log format
+
+The binary record on disk / on the wire is:
+
+```
+0..3   magic "ZLOG"   (uint32, little-endian)
+4      version        (1)
+5      level          (1)
+6..13  unix nanoseconds (uint64, native order)
+14..15 msgLen         (uint16, native order)
+16+    message bytes
+       optional: 1-byte fieldCount, then fields
+```
+
+Each field is `keyLen(1) + key + type(1) + value`. Numeric values are 4 or 8 bytes native order. String / bytes values are `len(uint16, native) + payload`.
+
+Native byte order is intentional: only this package's writers consume the binary form, so a `bswap` per field would buy nothing. The binary form is **not** stable across machines with different endianness — if you ship binary logs over the wire, decode on the producer's architecture.
+
+## Testing
+
+```bash
+go test -race ./...
+go test -bench=. -benchmem ./...
+```
+
+CI runs build + race + zero-alloc verification on Linux / macOS / Windows.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
