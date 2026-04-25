@@ -4,6 +4,7 @@
 package zlog
 
 import (
+	"fmt"
 	"os"
 	"sync/atomic"
 	"syscall"
@@ -83,42 +84,52 @@ func NewMMapWriter(path string, size int64) (*MMapWriter, error) {
 	}, nil
 }
 
-// Write writes data to the memory-mapped file
+// Write writes data to the memory-mapped file. Reserves a contiguous
+// region with a CAS loop on offset so concurrent writers can't race on
+// wrap-around or overlap each other's slots.
 func (w *MMapWriter) Write(b []byte) (int, error) {
 	n := int64(len(b))
 	if n == 0 {
 		return 0, nil
 	}
-
-	// Get current offset and advance
-	offset := w.offset.Add(n)
-	if offset > w.size {
-		// Wrap around (circular buffer)
-		w.offset.Store(n)
-		offset = n
+	if n > w.size {
+		return 0, fmt.Errorf("zlog: mmap write of %d bytes exceeds region size %d", n, w.size)
 	}
-	start := offset - n
 
-	// Direct memory copy - no syscalls!
-	copy(w.data[start:offset], b)
+	var start, end int64
+	for {
+		cur := w.offset.Load()
+		if cur+n > w.size {
+			if w.offset.CompareAndSwap(cur, n) {
+				start, end = 0, n
+				break
+			}
+		} else {
+			if w.offset.CompareAndSwap(cur, cur+n) {
+				start, end = cur, cur+n
+				break
+			}
+		}
+	}
 
-	// Only sync if we cross a page boundary
+	copy(w.data[start:end], b)
+
+	// FlushViewOfFile is non-blocking; the prior goroutine-per-flush
+	// pattern was both racy and wasteful.
 	startPage := start / w.pageSize
-	endPage := offset / w.pageSize
+	endPage := end / w.pageSize
 	if startPage != endPage {
-		// Async sync in background
-		go w.syncRange(startPage*w.pageSize, w.pageSize)
+		w.syncRange(startPage*w.pageSize, w.pageSize)
 	}
 
 	return len(b), nil
 }
 
-// syncRange asynchronously syncs a range of memory
+// syncRange schedules an async write-back of a range of memory.
 func (w *MMapWriter) syncRange(offset, length int64) {
 	if offset+length > w.size {
 		length = w.size - offset
 	}
-	// FlushViewOfFile for Windows
 	syscall.FlushViewOfFile(uintptr(unsafe.Pointer(&w.data[offset])), uintptr(length))
 }
 

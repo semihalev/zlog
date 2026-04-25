@@ -20,7 +20,7 @@ func NewCompatRingBuffer(size int) *OldRingBuffer {
 		return &Entry{}
 	})
 	return &OldRingBuffer{
-		rb:   NewRingBuffer[Entry](size, pool),
+		rb:   NewRingBuffer(size, pool),
 		pool: pool,
 	}
 }

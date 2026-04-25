@@ -33,24 +33,26 @@ func NewRingBuffer[T any](size int, pool *Pool[*T]) *RingBuffer[T] {
 	return rb
 }
 
-// Put adds an item to the ring buffer (wait-free for single producer)
+// Put adds an item to the ring buffer. Lock-free for multiple producers:
+// CAS on head claims the slot, then the item is published. Consumers in
+// Get() spin briefly if they observe an advanced head whose slot is still
+// nil — that window is bounded by the producer's single Store.
 //
 //go:inline
 func (rb *RingBuffer[T]) Put(item *T) bool {
-	head := rb.head.Load()
-	next := (head + 1) & rb.mask
+	for {
+		head := rb.head.Load()
+		next := (head + 1) & rb.mask
 
-	// Check if full
-	if next == rb.tail.Load() {
-		return false
+		if next == rb.tail.Load() {
+			return false
+		}
+
+		if rb.head.CompareAndSwap(head, next) {
+			rb.buffer[head].Store(item)
+			return true
+		}
 	}
-
-	// Store item
-	rb.buffer[head].Store(item)
-
-	// Update head (this is the linearization point)
-	rb.head.Store(next)
-	return true
 }
 
 // Get retrieves an item from the ring buffer (lock-free for multiple consumers)
