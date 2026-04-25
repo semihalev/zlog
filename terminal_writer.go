@@ -258,8 +258,7 @@ func (w *TerminalWriter) writeStructured(level Level, msg string, fields []Field
 	}
 	buf = append(buf, ' ')
 
-	sec, nsec := walltime()
-	_ = nsec
+	sec := int64(unixNanos() / 1_000_000_000)
 	if sec != w.cachedSec {
 		w.cachedSec = sec
 		formatTimePrefix(w.cachedTime[:], time.Unix(sec, 0))

@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"sync/atomic"
+	"time"
 	"unsafe"
 )
 
@@ -148,22 +149,47 @@ const (
 // Writer is an alias for io.Writer to avoid interface conversions
 type Writer = io.Writer
 
-// walltime returns the wall-clock time as (seconds, nanoseconds-within-second)
-// since the Unix epoch. Linkname'd to runtime.walltime so we go straight
-// through the VDSO without the time.Time allocation/conversion overhead.
-// Requires Go 1.26+ — earlier toolchains don't resolve this linkname target.
+// nanotime returns monotonic nanoseconds since process start. Linkname'd
+// from the runtime — this is the one runtime time symbol that's
+// portable across darwin/linux/windows and stable across Go versions
+// (it's used by every high-performance Go library that wants a fast
+// clock). On Linux/Windows we deliberately avoid runtime.walltime
+// because that symbol simply isn't defined on those platforms.
 //
-//go:linkname walltime runtime.walltime
+//go:linkname nanotime runtime.nanotime
 //go:noescape
-func walltime() (sec int64, nsec int32)
+func nanotime() int64
 
-// unixNanos folds walltime() into a single uint64 of Unix nanoseconds. Used
-// as the binary log timestamp; readers display this as a wall-clock time.
+// baseWallNs / baseMonoNs are sampled once at package init: the wall
+// clock reading and the monotonic reading at the same instant.
+//
+// Per-call we then compute Unix nanoseconds as
+//
+//	unixNanos() = baseWallNs + (nanotime() - baseMonoNs)
+//
+// which is a single VDSO call plus two int64 ops (~5-7ns on modern
+// hardware) and avoids the ~25ns time.Now() construction + monotonic-
+// adjust overhead.
+//
+// Trade-off: the reported wall clock drifts from the kernel's wall
+// clock if NTP adjusts the system time after init. For log timestamps
+// this is fine — we don't synchronize across machines at sub-second
+// precision, and the drift over hours is on the order of milliseconds.
+var (
+	baseWallNs int64
+	baseMonoNs int64
+)
+
+func init() {
+	baseWallNs = time.Now().UnixNano()
+	baseMonoNs = nanotime()
+}
+
+// unixNanos returns the current wall-clock time as Unix nanoseconds.
 //
 //go:inline
 func unixNanos() uint64 {
-	sec, nsec := walltime()
-	return uint64(sec)*1_000_000_000 + uint64(nsec)
+	return uint64(baseWallNs + nanotime() - baseMonoNs)
 }
 
 // StdoutWriter returns a writer to stdout
