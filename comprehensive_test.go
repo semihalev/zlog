@@ -328,8 +328,10 @@ func TestRingBuffer(t *testing.T) {
 		t.Error("Expected Get to fail on empty buffer")
 	}
 
-	// Test buffer full
-	for i := 0; i < 15; i++ { // Fill buffer (size-1)
+	// Test buffer full. The mutex-protected RingBuffer holds the full
+	// `size` items (no reserved slot needed to distinguish empty from
+	// full, since monotonic counters give us that for free).
+	for i := 0; i < 16; i++ {
 		if !rb.Put([]byte("x")) {
 			t.Errorf("Failed to put at %d", i)
 		}

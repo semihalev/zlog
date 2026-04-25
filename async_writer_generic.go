@@ -6,80 +6,127 @@ import (
 	"sync/atomic"
 )
 
-// RingBuffer[T] is a generic lock-free ring buffer optimized for Go 1.23+
-type RingBuffer[T any] struct {
-	_      [CacheLineSize]byte // Padding
-	mask   uint64              // Size mask for fast modulo
-	_      [56]byte            // Padding to cache line
-	head   atomic.Uint64       // Producer position
-	_      [56]byte            // Padding to cache line
-	tail   atomic.Uint64       // Consumer position
-	_      [56]byte            // Padding to cache line
-	buffer []atomic.Pointer[T] // Buffer of atomic pointers
-	pool   *Pool[*T]           // Object pool for entries
+// rbSlot is a single ring-buffer cell carrying a value plus a
+// sequence counter that doubles as a generation marker.
+//
+// Layout: seq is the readiness gate; val is the payload.
+//   - For producers: a slot is ready to be filled when seq == head
+//     (the index the producer is about to claim).
+//   - For consumers: a slot is ready to be read when seq == tail+1
+//     (one past the index the consumer is about to claim).
+//
+// After a Put at head=H, the producer sets seq=H+1 — that's both
+// "this slot is filled for generation H" and "wait for the consumer
+// to advance past H before overwriting."
+//
+// After a Get at tail=T, the consumer sets seq=T+size — that's
+// "this slot has been consumed; it's ready for the producer's next
+// generation (which writes at head = T+size)."
+//
+// Initial seq for slot i is i, so the very first Put at head=0 sees
+// slot[0].seq=0 and may claim it.
+type rbSlot[T any] struct {
+	seq atomic.Uint64
+	val atomic.Pointer[T]
 }
 
-// NewRingBuffer creates a new generic ring buffer
-func NewRingBuffer[T any](size int, pool *Pool[*T]) *RingBuffer[T] {
-	// Ensure size is power of 2
-	size = nextPowerOf2(size)
+// RingBuffer[T] is a lock-free MPMC ring buffer based on the LMAX
+// Disruptor pattern (per-slot sequence numbers).
+//
+// head and tail are monotonic uint64 counters; only their `& mask`
+// values index the buffer. The seq field on each slot encodes the
+// generation, which lets producers and consumers coordinate without
+// a mutex AND without the silent overwrite race that a "naive" CAS
+// design has (where a producer's full-check passing immediately
+// after a consumer claims the same slot lets the producer clobber
+// the slot the consumer is about to read).
+//
+// All operations are non-blocking: Put returns false on full, Get
+// returns (nil, false) on empty. There are no spin-waits.
+type RingBuffer[T any] struct {
+	_      [CacheLineSize]byte
+	mask   uint64
+	_      [56]byte
+	head   atomic.Uint64
+	_      [56]byte
+	tail   atomic.Uint64
+	_      [56]byte
+	buffer []rbSlot[T]
+	pool   *Pool[*T]
+}
 
+// NewRingBuffer creates a new generic ring buffer.
+func NewRingBuffer[T any](size int, pool *Pool[*T]) *RingBuffer[T] {
+	size = nextPowerOf2(size)
 	rb := &RingBuffer[T]{
-		buffer: make([]atomic.Pointer[T], size),
+		buffer: make([]rbSlot[T], size),
 		mask:   uint64(size - 1),
 		pool:   pool,
 	}
-
+	// Seed each slot's seq with its index so the first Put sees
+	// seq==head==0 on slot 0 and may claim it.
+	for i := range rb.buffer {
+		rb.buffer[i].seq.Store(uint64(i))
+	}
 	return rb
 }
 
-// Put adds an item to the ring buffer. Lock-free for multiple producers:
-// CAS on head claims the slot, then the item is published. Consumers in
-// Get() spin briefly if they observe an advanced head whose slot is still
-// nil — that window is bounded by the producer's single Store.
+// Put adds an item to the ring buffer. Returns false if full.
 //
 //go:inline
 func (rb *RingBuffer[T]) Put(item *T) bool {
 	for {
 		head := rb.head.Load()
-		next := (head + 1) & rb.mask
+		s := &rb.buffer[head&rb.mask]
+		seq := s.seq.Load()
 
-		if next == rb.tail.Load() {
+		switch d := int64(seq) - int64(head); {
+		case d == 0:
+			// Slot is ready for this generation. Try to claim.
+			if rb.head.CompareAndSwap(head, head+1) {
+				s.val.Store(item)
+				s.seq.Store(head + 1) // publish to consumers
+				return true
+			}
+			// Lost the race; another producer claimed this slot. Retry.
+		case d < 0:
+			// Slot still holds an unconsumed item from an earlier
+			// generation. The buffer is full from this producer's
+			// perspective; back off.
 			return false
-		}
-
-		if rb.head.CompareAndSwap(head, next) {
-			rb.buffer[head].Store(item)
-			return true
+		default:
+			// d > 0: another producer has already advanced past us.
+			// Reload head and retry.
 		}
 	}
 }
 
-// Get retrieves an item from the ring buffer (lock-free for multiple consumers)
+// Get retrieves an item from the ring buffer.
 //
 //go:inline
 func (rb *RingBuffer[T]) Get() (*T, bool) {
 	for {
 		tail := rb.tail.Load()
-		head := rb.head.Load()
+		s := &rb.buffer[tail&rb.mask]
+		seq := s.seq.Load()
 
-		// Empty?
-		if tail == head {
-			return nil, false
-		}
-
-		// Try to claim this slot
-		next := (tail + 1) & rb.mask
-		if rb.tail.CompareAndSwap(tail, next) {
-			// Wait for data to be available (should be immediate)
-			for {
-				if item := rb.buffer[tail].Load(); item != nil {
-					// Clear slot for reuse
-					rb.buffer[tail].Store(nil)
-					return item, true
-				}
-				runtime.Gosched()
+		switch d := int64(seq) - int64(tail+1); {
+		case d == 0:
+			// Slot is published for this consumer's generation.
+			if rb.tail.CompareAndSwap(tail, tail+1) {
+				item := s.val.Load()
+				s.val.Store(nil)
+				s.seq.Store(tail + uint64(len(rb.buffer))) // ready for next producer gen
+				return item, true
 			}
+			// Lost the race to another consumer. Retry.
+		case d < 0:
+			// Slot has not yet been published — either the buffer is
+			// empty or a producer claimed but hasn't stored. Either
+			// way, nothing for us right now.
+			return nil, false
+		default:
+			// d > 0: another consumer raced ahead. Reload tail and retry.
 		}
 	}
 }
@@ -89,7 +136,9 @@ type LogEntry struct {
 	data []byte // Reference to original data
 }
 
-// AsyncWriterV2 is a modern async writer using generic ring buffer
+// AsyncWriterV2 is a modern async writer using a lock-free MPMC ring
+// buffer. Multiple goroutines can call Write concurrently; multiple
+// workers consume in parallel. No mutex on the hot path.
 type AsyncWriterV2 struct {
 	rb      *RingBuffer[LogEntry]
 	writer  io.Writer
@@ -120,7 +169,7 @@ func NewAsyncWriterV2(w io.Writer, bufferSize, workers int) *AsyncWriterV2 {
 	return aw
 }
 
-// Write adds data to the async writer (zero-copy)
+// Write adds data to the async writer. Safe for concurrent callers.
 func (aw *AsyncWriterV2) Write(b []byte) (int, error) {
 	// Get entry from pool
 	entry := aw.pool.Get()

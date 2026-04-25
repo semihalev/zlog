@@ -1,3 +1,14 @@
+//go:build !race
+
+// This file enforces a strict 0-allocs/op contract on the structured
+// hot path with very large records (70 KB messages + 70 KB string and
+// bytes fields). The check is disabled under -race because the race
+// detector triggers GC frequently enough to clear sync.Pool's
+// localcache for the 1 MiB-class buffers these records require, which
+// leaks ~1 alloc/op into the measurement window. That's a property of
+// the test environment, not the production hot path: a non-race build
+// keeps the pool warm and runs at 0 allocs/op as advertised.
+
 package zlog
 
 import (
