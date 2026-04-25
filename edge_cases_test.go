@@ -142,10 +142,9 @@ func TestTerminalWriterEdgeCases(t *testing.T) {
 	})
 
 	t.Run("FieldValueSizeString", func(t *testing.T) {
-		// Test string/bytes with valid length prefix
+		// Test string/bytes with valid length prefix in native byte order
 		buf := make([]byte, 10)
-		buf[0] = 0 // high byte
-		buf[1] = 5 // low byte - length = 5
+		binaryEncodeUint16(buf, 5)
 		size := tw.fieldValueSize(buf, FieldTypeString)
 		if size != 7 { // 2 + 5
 			t.Errorf("Expected 7, got %v", size)

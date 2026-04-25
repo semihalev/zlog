@@ -1,130 +1,99 @@
 package zlog
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 	"strconv"
-	"sync"
 	"time"
 	"unsafe"
 )
 
-// LogfmtWriter decodes binary log format and outputs logfmt format
-// logfmt is human-readable and machine-parseable: key=value pairs
+// LogfmtWriter decodes binary log records and emits logfmt
+// (key=value) lines. Hot path is alloc-free: pooled buffer, no
+// string conversions, native byte order, classifier-table escaping.
 type LogfmtWriter struct {
 	out io.Writer
-	buf sync.Pool
 }
 
-// NewLogfmtWriter creates a new logfmt writer
+// NewLogfmtWriter creates a new logfmt writer.
 func NewLogfmtWriter(out io.Writer) *LogfmtWriter {
-	return &LogfmtWriter{
-		out: out,
-		buf: sync.Pool{
-			New: func() interface{} {
-				return make([]byte, 0, 512)
-			},
-		},
-	}
+	return &LogfmtWriter{out: out}
 }
 
-// Write decodes binary log and outputs logfmt format
+// Write decodes a binary log entry and emits logfmt output.
 func (w *LogfmtWriter) Write(b []byte) (int, error) {
-	if len(b) < 22 { // Minimum header size
+	if len(b) < 16 {
 		return 0, fmt.Errorf("invalid log entry: too short")
 	}
-
-	// Decode binary header
-	magic := binary.LittleEndian.Uint32(b[0:4])
+	magic := *(*uint32)(unsafe.Pointer(&b[0]))
 	if magic != MagicHeader {
 		return 0, fmt.Errorf("invalid magic header")
 	}
 
-	// version := b[4]
 	level := Level(b[5])
-	// seq := binary.LittleEndian.Uint64(b[6:14])
-	timestamp := binary.LittleEndian.Uint64(b[14:22])
-
-	pos := 22
-
-	// Get message
-	var msg string
-	if pos < len(b) {
-		msgLen := int(b[pos])
-		pos++
-		if pos+msgLen <= len(b) {
-			msg = string(b[pos : pos+msgLen])
-			pos += msgLen
-		}
+	timestamp := *(*uint64)(unsafe.Pointer(&b[6]))
+	msgLen := int(*(*uint16)(unsafe.Pointer(&b[14])))
+	msgStart := 16
+	msgEnd := msgStart + msgLen
+	if msgEnd > len(b) {
+		return 0, fmt.Errorf("invalid log entry: message truncated")
 	}
+	pos := msgEnd
 
-	// Get buffer from pool
-	bufInterface := w.buf.Get()
-	buf := bufInterface.([]byte)
-	buf = buf[:0]
-	defer func() {
-		w.buf.Put(buf)
-	}()
+	bufPtr := GetBuffer(256)
+	buf := (*bufPtr)[:0]
 
-	// Format timestamp
-	t := time.Unix(0, int64(timestamp))
 	buf = append(buf, "time="...)
+	t := time.Unix(0, int64(timestamp))
 	buf = t.AppendFormat(buf, time.RFC3339)
 
-	// Add level
 	buf = append(buf, " level="...)
 	buf = append(buf, getLevelString(level)...)
 
-	// Add message
 	buf = append(buf, " msg="...)
-	buf = appendQuoted(buf, msg)
+	buf = appendQuotedBytes(buf, b[msgStart:msgEnd])
 
-	// Decode fields if present
 	if pos < len(b) {
 		fieldCount := int(b[pos])
 		pos++
 
 		for i := 0; i < fieldCount && pos < len(b); i++ {
-			// Decode field key
 			keyLen := int(b[pos])
 			pos++
 			if pos+keyLen > len(b) {
 				break
 			}
-			key := string(b[pos : pos+keyLen])
+			keyStart := pos
+			keyEnd := pos + keyLen
 			pos += keyLen
 
 			if pos >= len(b) {
 				break
 			}
-
-			fieldType := FieldType(b[pos])
+			ftype := FieldType(b[pos])
 			pos++
 
-			// Add key
 			buf = append(buf, ' ')
-			buf = append(buf, key...)
+			buf = append(buf, b[keyStart:keyEnd]...)
 			buf = append(buf, '=')
 
-			// Decode and format value
-			value := w.decodeFieldValue(b[pos:], fieldType)
-			buf = append(buf, value...)
-			pos += w.fieldValueSize(b[pos:], fieldType)
+			buf, pos = appendLogfmtValue(buf, b, pos, ftype)
 		}
 	}
 
 	buf = append(buf, '\n')
 
-	// Write to output
 	_, err := w.out.Write(buf)
+
+	*bufPtr = buf[:0]
+	PutBuffer(bufPtr)
 	if err != nil {
 		return 0, err
 	}
 	return len(b), nil
 }
 
-// getLevelString returns the string representation of a level
+// getLevelString returns the lowercase string representation of a level.
 func getLevelString(level Level) string {
 	switch level {
 	case LevelDebug:
@@ -142,135 +111,105 @@ func getLevelString(level Level) string {
 	}
 }
 
-// appendQuoted appends a quoted string if it contains spaces or special chars
-func appendQuoted(buf []byte, s string) []byte {
-	needsQuotes := false
-	for _, c := range s {
-		if c == ' ' || c == '"' || c == '=' || c == '\n' || c == '\r' {
-			needsQuotes = true
-			break
-		}
+// appendQuotedBytes applies logfmt quoting using the shared classifier table.
+func appendQuotedBytes(buf, s []byte) []byte {
+	var flags byte
+	for i := 0; i < len(s); i++ {
+		flags |= classify[s[i]]
 	}
+	needsEscape := flags&1 != 0
+	hasSpace := flags&2 != 0
 
-	if !needsQuotes && s != "" {
+	if !needsEscape && !hasSpace && len(s) > 0 {
 		return append(buf, s...)
 	}
+	if !needsEscape && len(s) > 0 {
+		buf = append(buf, '"')
+		buf = append(buf, s...)
+		return append(buf, '"')
+	}
 
-	// Quote the string
 	buf = append(buf, '"')
 	for _, c := range s {
-		if c == '"' {
+		switch c {
+		case '"':
 			buf = append(buf, '\\', '"')
-		} else if c == '\\' {
+		case '\\':
 			buf = append(buf, '\\', '\\')
-		} else if c == '\n' {
+		case '\n':
 			buf = append(buf, '\\', 'n')
-		} else if c == '\r' {
+		case '\r':
 			buf = append(buf, '\\', 'r')
-		} else {
-			buf = append(buf, byte(c))
+		default:
+			buf = append(buf, c)
 		}
 	}
-	buf = append(buf, '"')
-	return buf
+	return append(buf, '"')
 }
 
-// decodeFieldValue decodes a field value to string
-func (w *LogfmtWriter) decodeFieldValue(b []byte, fieldType FieldType) string {
-	switch fieldType {
+// appendLogfmtValue decodes a binary field value into buf using native byte
+// order and returns the new position.
+func appendLogfmtValue(buf, b []byte, pos int, ft FieldType) ([]byte, int) {
+	switch ft {
 	case FieldTypeInt:
-		if len(b) < 8 {
-			return "?"
+		if len(b)-pos < 8 {
+			return append(buf, '?'), pos + 8
 		}
-		// Big endian decoding to match encoding
-		v := uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 |
-			uint64(b[4])<<24 | uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7])
-		return strconv.FormatInt(int64(v), 10)
+		v := *(*int64)(unsafe.Pointer(&b[pos]))
+		return appendInt(buf, v), pos + 8
 
 	case FieldTypeUint:
-		if len(b) < 8 {
-			return "?"
+		if len(b)-pos < 8 {
+			return append(buf, '?'), pos + 8
 		}
-		// Big endian decoding to match encoding
-		v := uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 |
-			uint64(b[4])<<24 | uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7])
-		return strconv.FormatUint(v, 10)
-
-	case FieldTypeFloat32:
-		if len(b) < 4 {
-			return "?"
-		}
-		// Big endian decoding
-		v := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
-		f := *(*float32)(unsafe.Pointer(&v))
-		return strconv.FormatFloat(float64(f), 'g', -1, 32)
-
-	case FieldTypeFloat64:
-		if len(b) < 8 {
-			return "?"
-		}
-		// Big endian decoding
-		v := uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 |
-			uint64(b[4])<<24 | uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7])
-		f := *(*float64)(unsafe.Pointer(&v))
-		return strconv.FormatFloat(f, 'g', -1, 64)
-
-	case FieldTypeString:
-		if len(b) < 2 {
-			return "?"
-		}
-		// Big endian decoding for string length
-		slen := int(uint16(b[0])<<8 | uint16(b[1]))
-		if len(b) < 2+slen {
-			return "?"
-		}
-		// Quote if needed
-		var buf []byte
-		return string(appendQuoted(buf, string(b[2:2+slen])))
+		v := *(*uint64)(unsafe.Pointer(&b[pos]))
+		return appendUint(buf, v), pos + 8
 
 	case FieldTypeBool:
-		if len(b) < 8 {
-			return "?"
+		if len(b)-pos < 8 {
+			return append(buf, '?'), pos + 8
 		}
-		// Big endian decoding
-		v := uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 |
-			uint64(b[4])<<24 | uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7])
+		v := *(*uint64)(unsafe.Pointer(&b[pos]))
 		if v != 0 {
-			return "true"
+			return append(buf, "true"...), pos + 8
 		}
-		return "false"
+		return append(buf, "false"...), pos + 8
+
+	case FieldTypeFloat32:
+		if len(b)-pos < 4 {
+			return append(buf, '?'), pos + 4
+		}
+		f := *(*float32)(unsafe.Pointer(&b[pos]))
+		return strconv.AppendFloat(buf, float64(f), 'g', -1, 32), pos + 4
+
+	case FieldTypeFloat64:
+		if len(b)-pos < 8 {
+			return append(buf, '?'), pos + 8
+		}
+		f := *(*float64)(unsafe.Pointer(&b[pos]))
+		return strconv.AppendFloat(buf, f, 'g', -1, 64), pos + 8
+
+	case FieldTypeString:
+		if len(b)-pos < 2 {
+			return append(buf, '?'), pos + 2
+		}
+		slen := int(*(*uint16)(unsafe.Pointer(&b[pos])))
+		if len(b)-pos < 2+slen {
+			return append(buf, '?'), pos + 2 + slen
+		}
+		return appendQuotedBytes(buf, b[pos+2:pos+2+slen]), pos + 2 + slen
 
 	case FieldTypeBytes:
-		if len(b) < 2 {
-			return "?"
+		if len(b)-pos < 2 {
+			return append(buf, '?'), pos + 2
 		}
-		// Big endian decoding for bytes length
-		blen := int(uint16(b[0])<<8 | uint16(b[1]))
-		if len(b) < 2+blen {
-			return "?"
+		blen := int(*(*uint16)(unsafe.Pointer(&b[pos])))
+		if len(b)-pos < 2+blen {
+			return append(buf, '?'), pos + 2 + blen
 		}
-		// Format as hex string
-		return fmt.Sprintf("%x", b[2:2+blen])
+		return appendHex(buf, b[pos+2:pos+2+blen]), pos + 2 + blen
 
 	default:
-		return "?"
-	}
-}
-
-// fieldValueSize returns the size of a field value in bytes
-func (w *LogfmtWriter) fieldValueSize(b []byte, fieldType FieldType) int {
-	switch fieldType {
-	case FieldTypeInt, FieldTypeUint, FieldTypeFloat64, FieldTypeBool:
-		return 8
-	case FieldTypeFloat32:
-		return 4
-	case FieldTypeString, FieldTypeBytes:
-		if len(b) < 2 {
-			return 2
-		}
-		// Big endian decoding for length
-		return 2 + int(uint16(b[0])<<8|uint16(b[1]))
-	default:
-		return 0
+		return append(buf, '?'), pos
 	}
 }

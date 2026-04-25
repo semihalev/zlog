@@ -3,6 +3,7 @@ package zlog
 import (
 	"fmt"
 	"os"
+	"unsafe"
 )
 
 // Small buffer pool for integer conversions (removed - not needed with current optimization)
@@ -53,42 +54,27 @@ func (l *StructuredLogger) FatalKV(msg string, keysAndValues ...any) {
 	os.Exit(1)
 }
 
-// logKV logs with key-value pairs using simple formatting
+// logKV logs with key-value pairs using simple formatting.
 //
 //go:noinline
 func (l *StructuredLogger) logKV(level Level, msg string, keysAndValues ...any) {
-	// Estimate size
 	estimatedSize := 256 + len(msg)
-	// Get buffer from pool
 	bufPtr := getStructuredBuffer(estimatedSize)
-	buf := *bufPtr
+	buf := (*bufPtr)[:cap(*bufPtr)]
 
-	// Ensure capacity
-	if cap(buf) < estimatedSize {
-		buf = make([]byte, estimatedSize, estimatedSize)
-	} else {
-		buf = buf[:estimatedSize]
-	}
-	pos := 0
+	p := unsafe.Pointer(&buf[0])
+	*(*uint32)(p) = MagicHeader
+	*(*uint8)(unsafe.Add(p, 4)) = Version
+	*(*uint8)(unsafe.Add(p, 5)) = byte(level)
+	*(*uint64)(unsafe.Add(p, 6)) = unixNanos()
 
-	// Binary header
-	pos += writeBinaryHeader(buf, level, l.sequence.Add(1))
-
-	// Message
-	msgLen := len(msg)
-	if msgLen > 255 {
-		msgLen = 255
-	}
-	buf[pos] = byte(msgLen)
-	pos++
+	msgLen := min(len(msg), 65535)
+	*(*uint16)(unsafe.Add(p, 14)) = uint16(msgLen)
+	pos := 16
 	copy(buf[pos:], msg[:msgLen])
 	pos += msgLen
 
-	// Convert KV pairs to fields
-	fieldCount := len(keysAndValues) / 2
-	if fieldCount > 255 {
-		fieldCount = 255
-	}
+	fieldCount := min(len(keysAndValues)/2, 255)
 	buf[pos] = byte(fieldCount)
 	pos++
 
@@ -151,17 +137,15 @@ func (l *StructuredLogger) logKV(level Level, msg string, keysAndValues ...any) 
 		}
 		n := encodeField(buf[pos:], &field)
 		if n == 0 {
-			break // No more space
+			break
 		}
 		pos += n
 	}
 
-	// Write
-	w := l.getWriter()
-	w.Write(buf[:pos])
+	if w := l.getWriter(); w != nil {
+		w.Write(buf[:pos])
+	}
 
-	// Return buffer to pool
-	*bufPtr = buf
 	putStructuredBuffer(bufPtr)
 }
 

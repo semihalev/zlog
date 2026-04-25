@@ -1,6 +1,7 @@
 package zlog
 
 import (
+	"math/bits"
 	"sync"
 	"unsafe"
 )
@@ -62,10 +63,7 @@ func (bp *BufferPool) Get(size int) *[]byte {
 
 	// Use CLZ (count leading zeros) for fast size class calculation
 	bits := 64 - leadingZeros64(uint64(size-1))
-	idx := bits - 6
-	if idx < 0 {
-		idx = 0
-	}
+	idx := max(bits-6, 0)
 	if idx >= len(bp.pools) {
 		// For very large buffers, allocate directly
 		b := make([]byte, 0, size)
@@ -100,25 +98,12 @@ func (bp *BufferPool) Put(buf *[]byte) {
 	}
 }
 
-// leadingZeros64 counts leading zeros using compiler intrinsics
+// leadingZeros64 forwards to math/bits, which compiles to a single CLZ
+// instruction on every supported architecture.
 //
 //go:inline
 func leadingZeros64(x uint64) int {
-	return len64tab[x>>58] +
-		len64tab[(x>>52)&0x3f] +
-		len64tab[(x>>46)&0x3f] +
-		len64tab[(x>>40)&0x3f] +
-		len64tab[(x>>34)&0x3f] +
-		len64tab[(x>>28)&0x3f] +
-		len64tab[(x>>22)&0x3f] +
-		len64tab[(x>>16)&0x3f]
-}
-
-var len64tab = [64]int{
-	64, 63, 62, 62, 61, 61, 61, 61, 60, 60, 60, 60, 60, 60, 60, 60,
-	59, 59, 59, 59, 59, 59, 59, 59, 59, 59, 59, 59, 59, 59, 59, 59,
-	58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58,
-	58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58,
+	return bits.LeadingZeros64(x)
 }
 
 // Global buffer pool instance

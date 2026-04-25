@@ -106,49 +106,33 @@ func (l *Logger) Fatal(msg string) {
 	os.Exit(1)
 }
 
-// log is the core logging function
+// log is the core logging function. Always routes through the pooled buffer
+// because passing a stack-allocated slice to an io.Writer interface forces it
+// to escape to the heap anyway.
 func (l *Logger) log(level Level, msg string) {
-	msgLen := len(msg)
-	requiredSize := 16 + msgLen
+	requiredSize := 16 + len(msg)
 
-	// For small messages, use stack allocation
-	if requiredSize <= 256 {
-		var stackBuf [256]byte
-		l.formatMessage(stackBuf[:requiredSize], level, msg)
-		if l.writer != nil {
-			l.writer.Write(stackBuf[:requiredSize])
-		}
-		return
-	}
-
-	// For larger messages, use pool
 	bufPtr := GetBuffer(requiredSize)
 	buf := (*bufPtr)[:requiredSize]
 
-	// Format message
-	l.formatMessage(buf[:requiredSize], level, msg)
+	l.formatMessage(buf, level, msg)
 
-	// Write
 	if l.writer != nil {
-		l.writer.Write(buf[:requiredSize])
+		l.writer.Write(buf)
 	}
 
-	// Return buffer to pool
 	PutBuffer(bufPtr)
 }
 
-// formatMessage formats the log message into the buffer
+// formatMessage formats the log message into the buffer.
 //
 //go:inline
 func (l *Logger) formatMessage(buf []byte, level Level, msg string) {
-	// Header
 	*(*uint32)(unsafe.Pointer(&buf[0])) = MagicHeader
 	buf[4] = Version
 	buf[5] = byte(level)
-	*(*uint64)(unsafe.Pointer(&buf[6])) = uint64(nanotime())
+	*(*uint64)(unsafe.Pointer(&buf[6])) = unixNanos()
 	*(*uint16)(unsafe.Pointer(&buf[14])) = uint16(len(msg))
-
-	// Message
 	copy(buf[16:], msg)
 }
 
@@ -164,11 +148,22 @@ const (
 // Writer is an alias for io.Writer to avoid interface conversions
 type Writer = io.Writer
 
-// Runtime functions
+// walltime returns the wall-clock time as (seconds, nanoseconds-within-second)
+// since the Unix epoch. Linkname'd to runtime.walltime so we go straight
+// through the VDSO without the time.Time allocation/conversion overhead.
 //
-//go:linkname nanotime runtime.nanotime
+//go:linkname walltime runtime.walltime
 //go:noescape
-func nanotime() int64
+func walltime() (sec int64, nsec int32)
+
+// unixNanos folds walltime() into a single uint64 of Unix nanoseconds. Used
+// as the binary log timestamp; readers display this as a wall-clock time.
+//
+//go:inline
+func unixNanos() uint64 {
+	sec, nsec := walltime()
+	return uint64(sec)*1_000_000_000 + uint64(nsec)
+}
 
 // StdoutWriter returns a writer to stdout
 func StdoutWriter() Writer {

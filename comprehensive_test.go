@@ -6,7 +6,15 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 )
+
+// unsafePointerOf returns a pointer to the first byte of buf. Used by tests
+// that need to write multi-byte values in native byte order to match the
+// production encoder.
+func unsafePointerOf(buf []byte) unsafe.Pointer {
+	return unsafe.Pointer(&buf[0])
+}
 
 // testCapture is a test helper that implements io.Writer
 type testCapture struct {
@@ -218,23 +226,19 @@ func TestTerminalLevelStrings(t *testing.T) {
 func TestTerminalDecodeFields(t *testing.T) {
 	tw := &TerminalWriter{}
 
-	// Test int decoding
+	// Native byte order: -1 has all bits set in any order.
 	intBuf := make([]byte, 8)
-	intBuf[0] = 0xFF // -1 in big endian
-	intBuf[1] = 0xFF
-	intBuf[2] = 0xFF
-	intBuf[3] = 0xFF
-	intBuf[4] = 0xFF
-	intBuf[5] = 0xFF
-	intBuf[6] = 0xFF
-	intBuf[7] = 0xFF
+	for i := range intBuf {
+		intBuf[i] = 0xFF
+	}
 	if got := tw.decodeFieldValue(intBuf, FieldTypeInt); got != "-1" {
 		t.Errorf("decodeFieldValue(int) = %v, want -1", got)
 	}
 
-	// Test bool decoding
+	// Bool true: any non-zero. Use a low byte set so it's the same in both
+	// little- and big-endian decoding.
 	boolTrue := make([]byte, 8)
-	boolTrue[7] = 1
+	boolTrue[0] = 1
 	if got := tw.decodeFieldValue(boolTrue, FieldTypeBool); got != "true" {
 		t.Errorf("decodeFieldValue(bool true) = %v, want true", got)
 	}
@@ -244,14 +248,19 @@ func TestTerminalDecodeFields(t *testing.T) {
 		t.Errorf("decodeFieldValue(bool false) = %v, want false", got)
 	}
 
-	// Test string decoding
+	// String length is encoded in native byte order.
 	strBuf := make([]byte, 20)
-	strBuf[0] = 0 // length high byte
-	strBuf[1] = 5 // length low byte
+	binaryEncodeUint16(strBuf, 5)
 	copy(strBuf[2:], "hello")
 	if got := tw.decodeFieldValue(strBuf, FieldTypeString); got != "hello" {
 		t.Errorf("decodeFieldValue(string) = %v, want hello", got)
 	}
+}
+
+// binaryEncodeUint16 stores v at the start of buf in native byte order,
+// matching what the encoder writes via *(*uint16)(unsafe.Pointer(...)).
+func binaryEncodeUint16(buf []byte, v uint16) {
+	*(*uint16)(unsafePointerOf(buf)) = v
 }
 
 func TestFieldValueSize(t *testing.T) {
