@@ -3,15 +3,71 @@ package zlog
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"unsafe"
 )
-
-// Small buffer pool for integer conversions (removed - not needed with current optimization)
 
 // KV represents a key-value pair for compatibility
 type KV struct {
 	Key   string
 	Value any
+}
+
+// appendAnyValue formats an `any` value into buf without allocation for
+// the common scalar / string / []byte types. error and fmt.Stringer go
+// through their interface methods, which may allocate inside the user's
+// implementation but never in zlog itself. fmt.Sprint is the last-resort
+// path for genuinely unknown types and does allocate.
+//
+// Used by both the *TerminalWriter and *LogfmtWriter direct-text KV
+// paths so they can avoid the binary encode + decode round-trip.
+func appendAnyValue(buf []byte, v any) []byte {
+	if v == nil {
+		return append(buf, "<nil>"...)
+	}
+	switch x := v.(type) {
+	case string:
+		return escapeStringOptimized(buf, unsafe.Slice(unsafe.StringData(x), len(x)))
+	case int:
+		return appendInt(buf, int64(x))
+	case int64:
+		return appendInt(buf, x)
+	case int32:
+		return appendInt(buf, int64(x))
+	case int16:
+		return appendInt(buf, int64(x))
+	case int8:
+		return appendInt(buf, int64(x))
+	case uint:
+		return appendUint(buf, uint64(x))
+	case uint64:
+		return appendUint(buf, x)
+	case uint32:
+		return appendUint(buf, uint64(x))
+	case uint16:
+		return appendUint(buf, uint64(x))
+	case uint8:
+		return appendUint(buf, uint64(x))
+	case float64:
+		return strconv.AppendFloat(buf, x, 'g', -1, 64)
+	case float32:
+		return strconv.AppendFloat(buf, float64(x), 'g', -1, 32)
+	case bool:
+		if x {
+			return append(buf, "true"...)
+		}
+		return append(buf, "false"...)
+	case []byte:
+		return appendHex(buf, x)
+	case error:
+		s := x.Error()
+		return escapeStringOptimized(buf, unsafe.Slice(unsafe.StringData(s), len(s)))
+	case fmt.Stringer:
+		s := x.String()
+		return escapeStringOptimized(buf, unsafe.Slice(unsafe.StringData(s), len(s)))
+	default:
+		return append(buf, fmt.Sprint(v)...)
+	}
 }
 
 // Logger compatibility methods that accept any type
@@ -50,14 +106,30 @@ func (l *StructuredLogger) ErrorKV(msg string, keysAndValues ...any) {
 
 // FatalKV logs fatal with key-value pairs and exits (backward compatible)
 func (l *StructuredLogger) FatalKV(msg string, keysAndValues ...any) {
-	l.logKV(LevelFatal, msg, keysAndValues...)
+	if l.shouldLog(LevelFatal) {
+		l.logKV(LevelFatal, msg, keysAndValues...)
+	}
 	os.Exit(1)
 }
 
 // logKV logs with key-value pairs using simple formatting.
 //
+// Caveat: the fixed 256-byte field-section budget below means a KV log
+// with many long string values can have its trailing fields silently
+// truncated. For guaranteed completeness use the typed Field API.
+//
 //go:noinline
 func (l *StructuredLogger) logKV(level Level, msg string, keysAndValues ...any) {
+	// Direct-text fast paths skip the binary encode + re-decode.
+	switch tw := l.getWriter().(type) {
+	case *TerminalWriter:
+		tw.writeKV(level, msg, keysAndValues)
+		return
+	case *LogfmtWriter:
+		tw.writeKV(level, msg, keysAndValues)
+		return
+	}
+
 	estimatedSize := 256 + len(msg)
 	bufPtr := getStructuredBuffer(estimatedSize)
 	buf := (*bufPtr)[:cap(*bufPtr)]
@@ -176,9 +248,12 @@ func FatalKV(msg string, keysAndValues ...any) {
 	Default().FatalKV(msg, keysAndValues...)
 }
 
-// Helper to create field from any type (for convenience)
+// Any creates a string field from an arbitrary value via fmt.Sprint.
+//
+// This is a convenience that allocates — fmt.Sprint always returns a
+// freshly-built string. For zero-allocation logging use the typed
+// constructors (String, Int, Float64, ...) instead.
 func Any(key string, value any) Field {
-	// Use string representation for simplicity
 	return String(key, fmt.Sprint(value))
 }
 

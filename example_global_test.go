@@ -6,8 +6,8 @@ func Example_globalLogger() {
 	// Global logger is ready to use immediately
 	zlog.Info("Starting application")
 
-	// Log with key-value pairs (v0.x compatible)
-	zlog.Info("User logged in", "username", "john", "user_id", 123)
+	// Log with typed fields
+	zlog.Info("User logged in", zlog.String("username", "john"), zlog.Int("user_id", 123))
 
 	// Change log level
 	zlog.SetLevel(zlog.LevelWarn)
@@ -16,7 +16,7 @@ func Example_globalLogger() {
 	zlog.Debug("Debug message")
 
 	// This will be logged
-	zlog.Warn("Low memory", "available", "512MB")
+	zlog.Warn("Low memory", zlog.String("available", "512MB"))
 }
 
 func ExampleSetDefault() {

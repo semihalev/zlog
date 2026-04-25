@@ -25,7 +25,7 @@ func TestCompatibility(t *testing.T) {
 		}
 	})
 
-	// Test global functions with any values
+	// Test global KV compatibility functions with any values
 	t.Run("GlobalCompatibility", func(t *testing.T) {
 		original := Default()
 		defer SetDefault(original)
@@ -35,10 +35,10 @@ func TestCompatibility(t *testing.T) {
 		logger.SetWriter(&buf)
 		SetDefault(logger)
 
-		// Old style calls should work
+		// Old style calls stay available through the explicit KV helpers.
 		Info("simple message")
-		Info("with values", "key", "value", "number", 123)
-		Error("error occurred", "code", 404, "path", "/api/users")
+		InfoKV("with values", "key", "value", "number", 123)
+		ErrorKV("error occurred", "code", 404, "path", "/api/users")
 
 		if buf.Len() == 0 {
 			t.Error("No output from global functions")
@@ -74,12 +74,12 @@ func TestGlobalCompatibilityMigration(t *testing.T) {
 	logger.SetWriter(io.Discard)
 	SetDefault(logger)
 
-	// These should all work like v0.x without errors
+	// These should all work through the compatibility KV helpers.
 	Info("Starting application")
 	Debug("Debug mode enabled")
-	Info("User logged in", "username", "john_doe", "user_id", 12345)
-	Warn("Low memory", "available", "512MB", "threshold", "1GB")
-	Error("Connection failed", "host", "db.example.com", "port", 5432, "error", "timeout")
+	InfoKV("User logged in", "username", "john_doe", "user_id", 12345)
+	WarnKV("Low memory", "available", "512MB", "threshold", "1GB")
+	ErrorKV("Connection failed", "host", "db.example.com", "port", 5432, "error", "timeout")
 
 	// If we got here without panic, the API is compatible
 }

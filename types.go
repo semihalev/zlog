@@ -101,9 +101,14 @@ func (l *Logger) Error(msg string) {
 	l.log(LevelError, msg)
 }
 
-// Fatal logs a fatal message and exits
+// Fatal logs a fatal message and exits with code 1. The level guard mirrors
+// the other Logger methods so behavior is consistent — but Fatal always
+// exits, even when the level is filtered out (the message just isn't
+// written).
 func (l *Logger) Fatal(msg string) {
-	l.log(LevelFatal, msg)
+	if l.shouldLog(LevelFatal) {
+		l.log(LevelFatal, msg)
+	}
 	os.Exit(1)
 }
 
@@ -111,12 +116,13 @@ func (l *Logger) Fatal(msg string) {
 // because passing a stack-allocated slice to an io.Writer interface forces it
 // to escape to the heap anyway.
 func (l *Logger) log(level Level, msg string) {
-	requiredSize := 16 + len(msg)
+	msgLen := min(len(msg), 65535)
+	requiredSize := 16 + msgLen
 
 	bufPtr := GetBuffer(requiredSize)
 	buf := (*bufPtr)[:requiredSize]
 
-	l.formatMessage(buf, level, msg)
+	l.formatMessage(buf, level, msg[:msgLen])
 
 	if l.writer != nil {
 		l.writer.Write(buf)

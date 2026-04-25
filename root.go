@@ -10,12 +10,11 @@ import (
 var defaultLogger unsafe.Pointer
 
 func init() {
-	// Initialize with a structured logger
+	// Initialize with a structured logger writing colored, padded output
+	// to stdout. TTY/color detection is handled by NewTerminalWriter, so
+	// this stays sensible when stdout is piped or redirected to a file.
+	// Users can swap the writer with SetWriter().
 	logger := NewStructured()
-
-	// By default, use terminal output for stderr if it's a terminal
-	// This provides a better out-of-box experience
-	// Users can always change it with SetWriter()
 	logger.SetWriter(StdoutTerminal())
 
 	atomic.StorePointer(&defaultLogger, unsafe.Pointer(logger))
@@ -34,48 +33,28 @@ func SetDefault(logger *StructuredLogger) {
 // Global logging functions that use the default logger
 
 // Debug logs a debug message using the default logger
-func Debug(msg string, keysAndValues ...any) {
-	if len(keysAndValues) == 0 {
-		Default().Debug(msg)
-	} else {
-		Default().DebugKV(msg, keysAndValues...)
-	}
+func Debug(msg string, fields ...Field) {
+	Default().Debug(msg, fields...)
 }
 
 // Info logs an info message using the default logger
-func Info(msg string, keysAndValues ...any) {
-	if len(keysAndValues) == 0 {
-		Default().Info(msg)
-	} else {
-		Default().InfoKV(msg, keysAndValues...)
-	}
+func Info(msg string, fields ...Field) {
+	Default().Info(msg, fields...)
 }
 
 // Warn logs a warning message using the default logger
-func Warn(msg string, keysAndValues ...any) {
-	if len(keysAndValues) == 0 {
-		Default().Warn(msg)
-	} else {
-		Default().WarnKV(msg, keysAndValues...)
-	}
+func Warn(msg string, fields ...Field) {
+	Default().Warn(msg, fields...)
 }
 
 // Error logs an error message using the default logger
-func Error(msg string, keysAndValues ...any) {
-	if len(keysAndValues) == 0 {
-		Default().Error(msg)
-	} else {
-		Default().ErrorKV(msg, keysAndValues...)
-	}
+func Error(msg string, fields ...Field) {
+	Default().Error(msg, fields...)
 }
 
 // Fatal logs a fatal message using the default logger and exits
-func Fatal(msg string, keysAndValues ...any) {
-	if len(keysAndValues) == 0 {
-		Default().Fatal(msg)
-	} else {
-		Default().FatalKV(msg, keysAndValues...)
-	}
+func Fatal(msg string, fields ...Field) {
+	Default().Fatal(msg, fields...)
 }
 
 // SetLevel sets the minimum log level for the default logger

@@ -88,10 +88,14 @@ func Bool(key string, val bool) Field {
 	return Field{Key: key, Type: FieldTypeBool, num: n}
 }
 
-// Bytes creates a bytes field
+// Bytes creates a bytes field. An empty or nil slice is allowed and
+// renders as no payload (decoders already check ptr/num before reading).
 //
 //go:inline
 func Bytes(key string, val []byte) Field {
+	if len(val) == 0 {
+		return Field{Key: key, Type: FieldTypeBytes}
+	}
 	return Field{Key: key, Type: FieldTypeBytes, ptr: unsafe.Pointer(&val[0]), num: uint64(len(val))}
 }
 
@@ -139,16 +143,19 @@ func (l *StructuredLogger) getWriter() Writer {
 // boundary, so we always use the pool — that's where zero-alloc actually
 // holds (warm sync.Pool).
 //
-// logFields encodes a structured record and writes it. If the writer is a
-// *TerminalWriter we skip the binary intermediate entirely and format text
-// straight into the pooled buffer — the most common case (humans reading
-// logs in a terminal) is also the fastest.
+// logFields encodes a structured record and writes it. Text writers with a
+// direct structured path skip the binary intermediate entirely and format the
+// fields straight into their pooled output buffer.
 //
 //go:noinline
 func (l *StructuredLogger) logFields(level Level, msg string, fields []Field) {
 	w := l.getWriter()
 	if tw, ok := w.(*TerminalWriter); ok {
 		tw.writeStructured(level, msg, fields)
+		return
+	}
+	if lw, ok := w.(*LogfmtWriter); ok {
+		lw.writeStructured(level, msg, fields)
 		return
 	}
 
@@ -158,14 +165,20 @@ func (l *StructuredLogger) logFields(level Level, msg string, fields []Field) {
 	// numerics (the max), or 2 + payload length for string/bytes. f.num is
 	// the byte count only for FieldTypeBytes; for everything else it's the
 	// numeric value, so we must not blindly add it to the size.
+	fieldCount := min(len(fields), 255)
 	estimatedSize := 17 + msgLen
-	for _, f := range fields {
-		s := 3 + len(f.Key)
+	for i := 0; i < fieldCount; i++ {
+		f := &fields[i]
+		s := 3 + min(len(f.Key), 255)
 		switch f.Type {
 		case FieldTypeString:
-			s += 2 + len(f.str)
+			s += 2 + min(len(f.str), 65535)
 		case FieldTypeBytes:
-			s += 2 + int(f.num)
+			dataLen := 65535
+			if f.num < 65535 {
+				dataLen = int(f.num)
+			}
+			s += 2 + dataLen
 		default:
 			s += 8
 		}
@@ -206,8 +219,45 @@ func formatStructuredMessage(buf []byte, level Level, msg string, fields []Field
 	buf[pos] = byte(fieldCount)
 	pos++
 
-	for i := 0; i < fieldCount && pos < len(buf)-32; i++ {
-		pos += encodeField(buf[pos:], &fields[i])
+	for i := 0; i < fieldCount; i++ {
+		f := &fields[i]
+		keyLen := min(len(f.Key), 255)
+		buf[pos] = byte(keyLen)
+		copy(buf[pos+1:pos+1+keyLen], f.Key[:keyLen])
+		pos += 1 + keyLen
+		buf[pos] = byte(f.Type)
+		pos++
+
+		switch f.Type {
+		case FieldTypeInt, FieldTypeUint, FieldTypeBool, FieldTypeFloat64:
+			*(*uint64)(unsafe.Pointer(&buf[pos])) = f.num
+			pos += 8
+
+		case FieldTypeFloat32:
+			*(*uint32)(unsafe.Pointer(&buf[pos])) = uint32(f.num)
+			pos += 4
+
+		case FieldTypeString:
+			strLen := min(len(f.str), 65535)
+			*(*uint16)(unsafe.Pointer(&buf[pos])) = uint16(strLen)
+			pos += 2
+			if strLen > 0 {
+				copy(buf[pos:], f.str[:strLen])
+				pos += strLen
+			}
+
+		case FieldTypeBytes:
+			dataLen := 65535
+			if f.num < 65535 {
+				dataLen = int(f.num)
+			}
+			*(*uint16)(unsafe.Pointer(&buf[pos])) = uint16(dataLen)
+			pos += 2
+			if f.ptr != nil && dataLen > 0 {
+				copy(buf[pos:], unsafe.Slice((*byte)(f.ptr), dataLen))
+				pos += dataLen
+			}
+		}
 	}
 
 	return pos
@@ -321,12 +371,13 @@ func (l *StructuredLogger) Error(msg string, fields ...Field) {
 	}
 }
 
-// Fatal logs a fatal message with fields and exits
+// Fatal logs a fatal message with fields and exits with code 1. Fatal always
+// exits, even when the level is filtered out (the message just isn't written).
 //
 //go:inline
 func (l *StructuredLogger) Fatal(msg string, fields ...Field) {
 	if l.shouldLog(LevelFatal) {
 		l.logFields(LevelFatal, msg, fields)
-		os.Exit(1)
 	}
+	os.Exit(1)
 }

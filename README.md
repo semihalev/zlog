@@ -89,13 +89,19 @@ log.Info("event",
 
 All field constructors are inlinable and allocation-free.
 
-There's also a key/value-pair API for the global helper that's friendlier when you have `any` values:
+The global helpers (`zlog.Info`, `zlog.Warn`, ...) use the same typed `Field`
+API and stay allocation-free:
 
 ```go
-zlog.Info("user logged in", "username", "alice", "user_id", 12345)
+zlog.Info("user logged in", zlog.String("username", "alice"), zlog.Int("user_id", 12345))
 ```
 
-The global helpers (`zlog.Info`, `zlog.Warn`, ...) accept either typed `Field` values or alternating key/value pairs.
+There's also an explicit key/value compatibility API that's friendlier when you
+have `any` values:
+
+```go
+zlog.InfoKV("user logged in", "username", "alice", "user_id", 12345)
+```
 
 ## Writers
 

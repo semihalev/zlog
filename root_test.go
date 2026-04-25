@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 func TestGlobalLogger(t *testing.T) {
@@ -99,6 +100,31 @@ func TestGlobalSetWriter(t *testing.T) {
 	// Verify output
 	if buf.Len() == 0 {
 		t.Error("No output captured after SetWriter")
+	}
+}
+
+func TestGlobalTypedFieldsUseStructuredPath(t *testing.T) {
+	original := Default()
+	defer SetDefault(original)
+
+	var buf bytes.Buffer
+	logger := NewStructured()
+	logger.SetWriter(&buf)
+	SetDefault(logger)
+
+	Info("typed fields", String("name", "zlog"), Int("count", 2))
+
+	b := buf.Bytes()
+	if len(b) < 17 {
+		t.Fatalf("record too short: %d bytes", len(b))
+	}
+	msgLen := int(*(*uint16)(unsafe.Pointer(&b[14])))
+	pos := 16 + msgLen
+	if pos >= len(b) {
+		t.Fatalf("record missing field count: len=%d pos=%d", len(b), pos)
+	}
+	if got := int(b[pos]); got != 2 {
+		t.Fatalf("field count = %d, want 2", got)
 	}
 }
 

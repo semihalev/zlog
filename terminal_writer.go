@@ -312,6 +312,79 @@ func (w *TerminalWriter) writeStructured(level Level, msg string, fields []Field
 	w.mu.Unlock()
 }
 
+// writeKV is the direct-text fast path for the KV (untyped) compatibility
+// API. Mirrors writeStructured but takes the alternating key/value pairs
+// untouched so we don't pay binary encode + decode. Type-switching on each
+// value happens once per call instead of once per field-write.
+func (w *TerminalWriter) writeKV(level Level, msg string, kv []any) {
+	w.mu.Lock()
+
+	buf := w.buf[:0]
+
+	if w.useColor && level < 5 {
+		buf = append(buf, levelStringsColored[level]...)
+	} else if level < 5 {
+		buf = append(buf, levelStrings[level]...)
+	} else {
+		buf = append(buf, levelStrings[5]...)
+	}
+	buf = append(buf, ' ')
+
+	sec := int64(unixNanos() / 1_000_000_000)
+	if sec != w.cachedSec {
+		w.cachedSec = sec
+		formatTimePrefix(w.cachedTime[:], time.Unix(sec, 0))
+	}
+	buf = append(buf, w.cachedTime[:]...)
+
+	msgLen := len(msg)
+	if msgLen > 0 {
+		buf = append(buf, msg...)
+	}
+
+	pairs := len(kv) / 2
+	if pairs > 0 {
+		padding := termMsgJust - msgLen
+		if padding < 1 {
+			padding = 1
+		}
+		if padding > len(spaces) {
+			padding = len(spaces)
+		}
+		buf = append(buf, spaces[:padding]...)
+
+		var levelColor []byte
+		if w.useColor && level < 5 {
+			levelColor = levelColors[level]
+		}
+
+		for i := 0; i < pairs; i++ {
+			if i > 0 {
+				buf = append(buf, ' ')
+			}
+			key := toString(kv[2*i])
+
+			if levelColor != nil {
+				buf = append(buf, levelColor...)
+				buf = append(buf, key...)
+				buf = append(buf, colorResetBytes...)
+				buf = append(buf, '=')
+			} else {
+				buf = append(buf, key...)
+				buf = append(buf, '=')
+			}
+
+			buf = appendAnyValue(buf, kv[2*i+1])
+		}
+	}
+
+	buf = append(buf, '\n')
+
+	w.buf = buf
+	w.out.Write(buf)
+	w.mu.Unlock()
+}
+
 // formatTimePrefix renders "[MM-DD|HH:MM:SS] " into dst. dst must be
 // exactly termTSWidth bytes. Uses two-digit ASCII via shift+mask without
 // a lookup table, fitting in a few NEON/SSE-friendly stores.
