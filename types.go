@@ -151,6 +151,7 @@ type Writer = io.Writer
 // walltime returns the wall-clock time as (seconds, nanoseconds-within-second)
 // since the Unix epoch. Linkname'd to runtime.walltime so we go straight
 // through the VDSO without the time.Time allocation/conversion overhead.
+// Requires Go 1.26+ — earlier toolchains don't resolve this linkname target.
 //
 //go:linkname walltime runtime.walltime
 //go:noescape

@@ -7,7 +7,7 @@ on:
     branches: [ master, main ]
 
 env:
-  GO_VERSION: '1.23'
+  GO_VERSION: '1.26'
 
 jobs:
   lint:
@@ -123,7 +123,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ['1.23']
+        go: ['1.26']
     steps:
     - uses: actions/checkout@v4
 
