@@ -111,3 +111,24 @@ func BenchmarkDefaultViaInstance_Discard(b *testing.B) {
 		Default().Info("Server started", String("addr", ":8080"), Int("workers", 4), Bool("ready", true))
 	}
 }
+
+// InfoF is the zero-allocation typed-Field path through the default
+// logger added in v2.0.8. Should match the via-instance numbers because
+// it forwards directly via ...Field with no boxing.
+func BenchmarkDefaultInfoF_DevNull(b *testing.B) {
+	defer setDefaultDevNull(b)()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		InfoF("Server started", String("addr", ":8080"), Int("workers", 4), Bool("ready", true))
+	}
+}
+
+func BenchmarkDefaultInfoF_Discard(b *testing.B) {
+	defer setDefaultDiscard(b)()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		InfoF("Server started", String("addr", ":8080"), Int("workers", 4), Bool("ready", true))
+	}
+}

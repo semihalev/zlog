@@ -89,19 +89,32 @@ log.Info("event",
 
 All field constructors are inlinable and allocation-free.
 
-The global helpers (`zlog.Info`, `zlog.Warn`, ...) use the same typed `Field`
-API and stay allocation-free:
+### Global helpers
+
+`zlog.Debug` / `Info` / `Warn` / `Error` / `Fatal` accept either typed `Field`
+values or alternating key/value pairs. The two styles are interchangeable:
 
 ```go
+// Untyped key/value pairs — zero allocations on the hot path.
+zlog.Info("user logged in", "username", "alice", "user_id", 12345)
+
+// Typed Fields — also accepted, but pays 3 allocs per call from the
+// Field-into-...any boxing at the callsite (Field is 56 bytes, doesn't
+// fit inline in interface storage). Functionally identical output.
 zlog.Info("user logged in", zlog.String("username", "alice"), zlog.Int("user_id", 12345))
 ```
 
-There's also an explicit key/value compatibility API that's friendlier when you
-have `any` values:
+For the **zero-allocation typed-Field path through the global helper**, use the
+`F` variants — `DebugF` / `InfoF` / `WarnF` / `ErrorF` / `FatalF`. They take
+`...Field` directly so no boxing happens:
 
 ```go
-zlog.InfoKV("user logged in", "username", "alice", "user_id", 12345)
+zlog.InfoF("user logged in", zlog.String("username", "alice"), zlog.Int("user_id", 12345))
 ```
+
+The compatibility-oriented `*KV` helpers (`InfoKV`, `WarnKV`, ...) are kept as
+explicit aliases for the untyped path, equivalent to passing `...any` to the
+bare names.
 
 ## Writers
 

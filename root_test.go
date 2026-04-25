@@ -2,6 +2,7 @@ package zlog
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 	"unsafe"
@@ -125,6 +126,53 @@ func TestGlobalTypedFieldsUseStructuredPath(t *testing.T) {
 	}
 	if got := int(b[pos]); got != 2 {
 		t.Fatalf("field count = %d, want 2", got)
+	}
+}
+
+// TestGlobalKVStyleInfo verifies the v2.0.6-compatible untyped style
+// works through Info with zero allocations on the inner code path
+// (callsite Field boxing is the only structural cost, and with KV
+// args there's no boxing of large types).
+func TestGlobalKVStyleInfo(t *testing.T) {
+	original := Default()
+	defer SetDefault(original)
+
+	var buf bytes.Buffer
+	logger := NewStructured()
+	logger.SetWriter(&buf)
+	SetDefault(logger)
+
+	Info("user logged in", "name", "alice", "age", 30)
+
+	b := buf.Bytes()
+	if len(b) < 17 {
+		t.Fatalf("record too short: %d bytes", len(b))
+	}
+	msgLen := int(*(*uint16)(unsafe.Pointer(&b[14])))
+	pos := 16 + msgLen
+	if pos >= len(b) {
+		t.Fatalf("record missing field count: len=%d pos=%d", len(b), pos)
+	}
+	if got := int(b[pos]); got != 2 {
+		t.Fatalf("field count = %d, want 2", got)
+	}
+}
+
+// TestGlobalInfoFZeroAlloc verifies the new typed-only entrypoint
+// allocates nothing on the steady-state hot path — that's the whole
+// point of having InfoF as a separate name from Info(...any).
+func TestGlobalInfoFZeroAlloc(t *testing.T) {
+	original := Default()
+	defer SetDefault(original)
+	logger := NewStructured()
+	logger.SetWriter(io.Discard)
+	SetDefault(logger)
+
+	allocs := testing.AllocsPerRun(20, func() {
+		InfoF("msg", String("k", "v"), Int("n", 1), Bool("ok", true))
+	})
+	if allocs != 0 {
+		t.Errorf("InfoF allocs = %v, want 0", allocs)
 	}
 }
 

@@ -3,11 +3,18 @@ package zlog_test
 import "github.com/semihalev/zlog/v2"
 
 func Example_globalLogger() {
-	// Global logger is ready to use immediately
+	// Global logger is ready to use immediately.
 	zlog.Info("Starting application")
 
-	// Log with typed fields
-	zlog.Info("User logged in", zlog.String("username", "john"), zlog.Int("user_id", 123))
+	// Two equivalent styles for adding fields:
+	//
+	//   * Untyped key/value pairs — zero allocations, works for the
+	//     common scalar types and strings:
+	zlog.Info("User logged in", "username", "john", "user_id", 123)
+
+	//   * Typed Fields — also accepted by Info (3 allocs from Field
+	//     boxing) or via InfoF for the zero-allocation path:
+	zlog.InfoF("User logged in", zlog.String("username", "john"), zlog.Int("user_id", 123))
 
 	// Change log level
 	zlog.SetLevel(zlog.LevelWarn)
@@ -16,7 +23,7 @@ func Example_globalLogger() {
 	zlog.Debug("Debug message")
 
 	// This will be logged
-	zlog.Warn("Low memory", zlog.String("available", "512MB"))
+	zlog.Warn("Low memory", "available", "512MB")
 }
 
 func ExampleSetDefault() {
